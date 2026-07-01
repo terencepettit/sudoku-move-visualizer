@@ -335,7 +335,7 @@ const TRUTH_COLOR = '#1a7fff';
 function truthTypeColor(truth) {
   if (truth.isCellTruth) return '#1a7fff';          // blue
   if (truth.unit < 9)   return '#a020f0';           // row → purple
-  if (truth.unit < 18)  return '#00b050';           // col → green
+  if (truth.unit < 18)  return '#00702f';           // col → dark green
   return '#c05800';                                  // box → orange-brown
 }
 
@@ -1418,6 +1418,11 @@ function renderTruthSVG() {
     ];
   }
 
+  // Segments are appended here. For a multi-segment truth this is a <g opacity>
+  // group so overlapping segments of the same truth don't stack into a darker
+  // stroke — the group's opacity is applied once, after its contents are flattened.
+  let lineTarget = svg;
+
   // Draw one straight line segment; gapStart/gapEnd control the badge-clearance gap
   function drawSeg(x1, y1, x2, y2, color, gapStart = true, gapEnd = true) {
     const GAP = 8;
@@ -1433,8 +1438,7 @@ function renderTruthSVG() {
     seg.setAttribute('stroke', color);
     seg.setAttribute('stroke-width', '2.5');
     seg.setAttribute('stroke-linecap', 'round');
-    seg.setAttribute('opacity', '0.65');
-    svg.appendChild(seg);
+    lineTarget.appendChild(seg);
   }
 
   for (const truth of userTruths) {
@@ -1464,6 +1468,12 @@ function renderTruthSVG() {
       const sortedKeys = [...truth.keys].sort((a, b) => keyCell(a) - keyCell(b));
       if (sortedKeys.length < 2) continue;
       const digit = keyDigit(sortedKeys[0]);
+
+      // Group the segments so their translucency composites once (see lineTarget).
+      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      group.setAttribute('opacity', '0.65');
+      svg.appendChild(group);
+      lineTarget = group;
 
       for (let i = 0; i < sortedKeys.length - 1; i++) {
         const k1 = sortedKeys[i], k2 = sortedKeys[i + 1];
