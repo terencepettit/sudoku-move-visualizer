@@ -301,7 +301,6 @@ let lastCheck  = null;   // last checkMove result
 let solution   = null;   // null if puzzle has no unique solution, else 81-digit array
 
 const TRUTH_COLOR = '#1a7fff';
-const TRUTH_COLORS = [TRUTH_COLOR]; // kept for preview line only
 
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
@@ -329,20 +328,14 @@ const UNIT_CELLS = Array.from({length: 27}, (_, u) => {
 const CELL_UNITS = Array.from({length: 81}, (_, i) =>
   [cellRow(i), 9 + cellCol(i), 18 + cellBox(i)]);
 
-const PEERS = Array.from({length: 81}, (_, i) => {
-  const p = new Set();
-  for (const u of CELL_UNITS[i])
-    for (const c of UNIT_CELLS[u])
-      if (c !== i) p.add(c);
-  return p;
-});
-
 const unitName = u => u < 9 ? `Row ${u+1}` : u < 18 ? `Col ${u-8}` : `Box ${u-17}`;
 const cellName = i => `R${cellRow(i)+1}C${cellCol(i)+1}`;
 
 const candKey  = (cell, digit) => cell * 9 + (digit - 1);
 const keyCell  = k => Math.floor(k / 9);
 const keyDigit = k => (k % 9) + 1;
+// Canonical signature for a set of candidate keys (numeric sort → consistent for equality tests)
+const keySig   = keys => [...keys].sort((a, b) => a - b).join(',');
 
 // ── Combinations ───────────────────────────────────────────────────────────
 
@@ -361,14 +354,6 @@ function* combos(arr, k) {
   }
 }
 
-function binomCoeff(n, k) {
-  if (k > n || k < 0) return 0;
-  k = Math.min(k, n - k);
-  let c = 1;
-  for (let i = 0; i < k; i++) c = c * (n - i) / (i + 1);
-  return c;
-}
-
 // ── All sets (for checkMove) ───────────────────────────────────────────────
 
 function buildAllSets() {
@@ -380,7 +365,7 @@ function buildAllSets() {
       if (!cells.length) continue;
       const keys = cells.map(i => candKey(i, d));
       sets.push({ type: 'digit-unit', digit: d, unit: u,
-        label: `${d}∈${unitName(u)}`, keys, keySet: new Set(keys) });
+        label: `${d}∈${unitName(u)}`, keys, keySet: new Set(keys), sig: keySig(keys) });
     }
   }
 
@@ -388,7 +373,7 @@ function buildAllSets() {
     if (given[i] || !cands[i].size) continue;
     const keys = [...cands[i]].map(d => candKey(i, d));
     sets.push({ type: 'cell', cell: i,
-      label: cellName(i), keys, keySet: new Set(keys) });
+      label: cellName(i), keys, keySet: new Set(keys), sig: keySig(keys) });
   }
 
   const keyToSets = new Map();
@@ -532,7 +517,7 @@ function truthFromDrag(fromKey, toKey) {
     // Same cell → cell truth
     if (cands[c1].size < 2) return null;
     const keys = [...cands[c1]].sort((a,b)=>a-b).map(d => candKey(c1, d));
-    return { isCellTruth: true, keys, keySet: new Set(keys),
+    return { isCellTruth: true, keys, keySet: new Set(keys), sig: keySig(keys),
              label: `Cell ${cellName(c1)}`, fromKey, toKey: keys[keys.length - 1] };
   }
 
@@ -546,22 +531,21 @@ function truthFromDrag(fromKey, toKey) {
   if (!cells.length) return null;
   const keys = cells.map(i => candKey(i, d1));
   return { isCellTruth: false, digit: d1, unit: commonUnit,
-           keys, keySet: new Set(keys),
+           keys, keySet: new Set(keys), sig: keySig(keys),
            label: `${d1} in ${unitName(commonUnit)}`, fromKey, toKey };
 }
 
 function cellTruthFromClick(cellIdx) {
   if (given[cellIdx] || cands[cellIdx].size < 2) return null;
   const keys = [...cands[cellIdx]].sort((a,b)=>a-b).map(d => candKey(cellIdx, d));
-  return { isCellTruth: true, keys, keySet: new Set(keys),
+  return { isCellTruth: true, keys, keySet: new Set(keys), sig: keySig(keys),
            label: `Cell ${cellName(cellIdx)}`,
            fromKey: keys[0], toKey: keys[keys.length - 1] };
 }
 
 function registerTruth(truth) {
   if (!truth) return false;
-  const ks = [...truth.keySet].sort().join(',');
-  if (userTruths.some(t => [...t.keySet].sort().join(',') === ks)) {
+  if (userTruths.some(t => t.sig === truth.sig)) {
     setStatus('That truth is already established.', 'err');
     return false;
   }
@@ -634,10 +618,8 @@ function _checkMoveImpl() {
     for (const s of keyToSets.get(k) || [])
       potCoverSet.add(s);
 
-  const truthSigs = new Set(userTruths.map(t => [...t.keySet].sort().join(',')));
-  const potCovers = [...potCoverSet].filter(s =>
-    !truthSigs.has([...s.keySet].sort().join(','))
-  );
+  const truthSigs = new Set(userTruths.map(t => t.sig));
+  const potCovers = [...potCoverSet].filter(s => !truthSigs.has(s.sig));
 
   // Precompute per-cover which base keys it touches (avoids iterating full keySet in dfs)
   for (const c of potCovers)
@@ -751,9 +733,10 @@ function _checkMoveImpl() {
       if (chosenSet.has(cover)) continue;
       if (hitLimit) return;
 
-      // Cover keys removed from remaining
+      // Cover keys removed from remaining. Iterate the cover's (few) base keys and
+      // test membership in remaining — O(|cover base keys|) instead of O(|remaining|).
       const nowCovered = [];
-      for (const k of remaining) if (cover.keySet.has(k)) nowCovered.push(k);
+      for (const k of cover._baseKeys) if (remaining.has(k)) nowCovered.push(k);
       for (const k of nowCovered) remaining.delete(k);
 
       // Decrement availCount for all base keys this cover touches
@@ -913,10 +896,12 @@ function checkByContradiction(baseKeySet, userTruths) {
       if (contradiction) break;
 
       for (const truth of userTruths) {
-        const remaining = truth.keys.filter(tk => !elim.has(tk));
-        if (remaining.length === 0) { contradiction = true; break; }
-        if (remaining.length === 1) {
-          const fc = keyCell(remaining[0]), fd = keyDigit(remaining[0]);
+        // Count surviving keys without allocating; bail once we know it's >1.
+        let rc = 0, last = -1;
+        for (const tk of truth.keys) { if (!elim.has(tk)) { if (++rc === 1) last = tk; else break; } }
+        if (rc === 0) { contradiction = true; break; }
+        if (rc === 1) {
+          const fc = keyCell(last), fd = keyDigit(last);
           if (!plac.has(fc)) q.push([fc, fd]);
           else if (plac.get(fc) !== fd) { contradiction = true; break; }
         }
@@ -1042,10 +1027,11 @@ function checkByTruthAssignment(userTruths) {
       }
       // Truth forcing: a truth reduced to 1 remaining key must be placed
       for (const truth of userTruths) {
-        const rem = truth.keys.filter(k => !elim.has(k));
-        if (rem.length === 0) { contradiction = true; break; }
-        if (rem.length === 1 && !plac.has(keyCell(rem[0])))
-          q.push([keyCell(rem[0]), keyDigit(rem[0])]);
+        let rc = 0, last = -1;
+        for (const k of truth.keys) { if (!elim.has(k)) { if (++rc === 1) last = k; else break; } }
+        if (rc === 0) { contradiction = true; break; }
+        if (rc === 1 && !plac.has(keyCell(last)))
+          q.push([keyCell(last), keyDigit(last)]);
       }
     }
     return contradiction ? null : elim;
@@ -1147,43 +1133,87 @@ function clearCheckResult() {
 
 // ── Grid rendering ─────────────────────────────────────────────────────────
 
-function buildGrid() {
+// The grid DOM is built once; subsequent renders reuse the same nodes. Cached
+// element references let hot loops (highlighting, SVG routing) skip querySelector.
+let gridBuilt = false;
+const cellEls    = new Array(81);   // .cell divs by cell index
+const digitEls   = new Array(81);   // .digit span by cell index
+const candGridEls = new Array(81);  // .candidates grid by cell index
+const candEls    = new Array(729);  // .cand span by candKey
+
+// Inline styles that applyAllHighlights sets and that a render must clear.
+const HL_PROPS = ['background','color','fontWeight','borderRadius','width','height',
+                  'justifySelf','alignSelf','position','zIndex'];
+
+function buildGridStructure() {
   const gridEl = document.getElementById('grid');
   gridEl.innerHTML = '';
 
   for (let i = 0; i < 81; i++) {
     const cell = document.createElement('div');
-    cell.className = 'cell' + (i === selIdx ? ' sel' : '');
+    cell.className = 'cell';
     cell.dataset.idx = i;
     cell.dataset.row = cellRow(i);
     cell.dataset.col = cellCol(i);
 
-    if (given[i]) {
-      cell.classList.add(solvedCells.has(i) ? 'solved' : 'given');
-      const d = document.createElement('span');
-      d.className = 'digit';
-      d.textContent = given[i];
-      cell.appendChild(d);
-    } else {
-      const cg = document.createElement('div');
-      cg.className = 'candidates';
-      for (let v = 1; v <= 9; v++) {
-        const span = document.createElement('span');
-        span.className = 'cand' + (cands[i].has(v) ? ' present' : '');
-        span.dataset.val = v;
-        span.textContent = cands[i].has(v) ? v : '';
-        // Nudge each candidate so all 9 have unique x AND unique y positions,
-        // preventing truth lines from overlapping regardless of direction.
-        const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = 3;
-        span.style.transform = `translate(${(ri - 1) * N}px, ${(1 - ci) * N}px)`;
-        cg.appendChild(span);
-      }
-      cell.appendChild(cg);
+    const digit = document.createElement('span');
+    digit.className = 'digit';
+    cell.appendChild(digit);
+    digitEls[i] = digit;
+
+    const cg = document.createElement('div');
+    cg.className = 'candidates';
+    for (let v = 1; v <= 9; v++) {
+      const span = document.createElement('span');
+      span.className = 'cand';
+      span.dataset.val = v;
+      // Nudge each candidate so all 9 have unique x AND unique y positions,
+      // preventing truth lines from overlapping regardless of direction.
+      // This offset is static per position, so it's set once here.
+      const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = 3;
+      span.style.transform = `translate(${(ri - 1) * N}px, ${(1 - ci) * N}px)`;
+      cg.appendChild(span);
+      candEls[candKey(i, v)] = span;
     }
+    cell.appendChild(cg);
+    candGridEls[i] = cg;
 
     gridEl.appendChild(cell);
+    cellEls[i] = cell;
   }
-  drawGridLines();
+
+  gridBuilt = true;
+  drawGridLines(); // grid lines never change — draw them once
+}
+
+// Update the existing grid to the current state without tearing down the DOM.
+function buildGrid() {
+  if (!gridBuilt) buildGridStructure();
+
+  for (let i = 0; i < 81; i++) {
+    const cell = cellEls[i];
+    cell.classList.toggle('sel', i === selIdx);
+
+    if (given[i]) {
+      cell.classList.toggle('solved', solvedCells.has(i));
+      cell.classList.toggle('given',  !solvedCells.has(i));
+      digitEls[i].textContent = given[i];
+      digitEls[i].style.display = '';
+      candGridEls[i].style.display = 'none';
+    } else {
+      cell.classList.remove('given', 'solved');
+      digitEls[i].style.display = 'none';
+      candGridEls[i].style.display = '';
+      for (let v = 1; v <= 9; v++) {
+        const span = candEls[candKey(i, v)];
+        const present = cands[i].has(v);
+        span.classList.toggle('present', present);
+        span.textContent = present ? v : '';
+        // Clear any highlight styling left over from a previous render.
+        for (const p of HL_PROPS) span.style[p] = '';
+      }
+    }
+  }
 }
 
 function drawGridLines() {
@@ -1271,11 +1301,11 @@ function applyAllHighlights() {
 }
 
 function candEl(k) {
-  return document.querySelector(`.cell[data-idx="${keyCell(k)}"] .cand[data-val="${keyDigit(k)}"]`);
+  return candEls[k] || null;
 }
 
 function candCenter(k) {
-  const el = candEl(k);
+  const el = candEls[k];
   if (!el) return null;
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
   const r = el.getBoundingClientRect();
@@ -1283,7 +1313,7 @@ function candCenter(k) {
 }
 
 function cellCenter(cellIdx) {
-  const el = document.querySelector(`.cell[data-idx="${cellIdx}"]`);
+  const el = cellEls[cellIdx];
   if (!el) return null;
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
   const r = el.getBoundingClientRect();
@@ -1300,7 +1330,7 @@ function renderTruthSVG() {
 
   // Position of digit in a cell (works even if the digit isn't a current candidate)
   function ghostCandCenter(cellIdx, digit) {
-    const cellEl = document.querySelector(`.cell[data-idx="${cellIdx}"]`);
+    const cellEl = cellEls[cellIdx];
     if (!cellEl) return null;
     const r = cellEl.getBoundingClientRect();
     const col = (digit - 1) % 3, row = Math.floor((digit - 1) / 3);
@@ -1334,7 +1364,7 @@ function renderTruthSVG() {
     const color = truth.color;
 
     if (truth.isCellTruth) {
-      const el = document.querySelector(`.cell[data-idx="${keyCell(truth.fromKey)}"]`);
+      const el = cellEls[keyCell(truth.fromKey)];
       if (!el) continue;
       const r = el.getBoundingClientRect();
       const INSET = 2;
@@ -1405,7 +1435,7 @@ function updateDragLine(toClientX, toClientY) {
   const x2 = toClientX - wrap.left;
   const y2 = toClientY - wrap.top;
 
-  const nextColor = TRUTH_COLORS[userTruths.length % TRUTH_COLORS.length];
+  const nextColor = TRUTH_COLOR;
 
   const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   line.setAttribute('x1', p1[0]); line.setAttribute('y1', p1[1]);
