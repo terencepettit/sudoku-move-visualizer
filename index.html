@@ -579,7 +579,10 @@ function paintCell(i, color) {
 
 function clearHighlights() {
   cellColors.fill(null);
+  // buildGrid() resets the candidate badge styling, so re-apply the truth /
+  // elimination highlights afterward (this only clears cosmetic cell colours).
   buildGrid();
+  applyAllHighlights();
 }
 
 // ── Truth management ───────────────────────────────────────────────────────
@@ -1446,16 +1449,16 @@ function renderTruthSVG() {
       const el = cellEls[keyCell(truth.fromKey)];
       if (!el) continue;
       const r = el.getBoundingClientRect();
-      const INSET = 2;
-      const x1 = r.left   - wrap.left + INSET;
-      const y1 = r.top    - wrap.top  + INSET;
-      const x2 = r.right  - wrap.left - INSET;
-      const y2 = r.bottom - wrap.top  - INSET;
+      // Centered square half the cell's size: each side sits midway between the
+      // cell edge and the cell centre.
+      const cx = (r.left + r.right) / 2 - wrap.left;
+      const cy = (r.top + r.bottom) / 2 - wrap.top;
+      const halfW = r.width / 4, halfH = r.height / 4;
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('x', x1);
-      rect.setAttribute('y', y1);
-      rect.setAttribute('width',  x2 - x1);
-      rect.setAttribute('height', y2 - y1);
+      rect.setAttribute('x', cx - halfW);
+      rect.setAttribute('y', cy - halfH);
+      rect.setAttribute('width',  halfW * 2);
+      rect.setAttribute('height', halfH * 2);
       rect.setAttribute('rx', '4');
       rect.setAttribute('fill', 'none');
       rect.setAttribute('stroke', color);
