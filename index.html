@@ -1358,16 +1358,11 @@ function applyAllHighlights() {
   }
   // Apply check eliminations (override truth color if needed)
   if (lastCheck) {
-    const baseKeySet = new Set(userTruths.flatMap(t => t.keys));
     for (const [c, d] of lastCheck.elims) {
       const k = candKey(c, d);
       const el = candEl(k);
       if (el) {
-        // Cannibalistic: eliminated candidate is also a truth key — split blue/red diagonally
-        const isCannibalistic = baseKeySet.has(k);
-        el.style.background  = isCannibalistic
-          ? 'linear-gradient(135deg, ' + TRUTH_COLOR + ' 50%, #ff0000 50%)'
-          : '#ff0000';
+        el.style.background  = '#ff0000';
         el.style.color       = '#fff';
         el.style.fontWeight  = '700';
         el.style.borderRadius= '2px';
