@@ -1501,7 +1501,7 @@ function setupDragHandlers() {
       const before = userTruths.length;
       userTruths = userTruths.filter(t => !t.keySet.has(k));
       if (userTruths.length !== before) {
-        userTruths.forEach((t, idx) => { t.color = TRUTH_COLORS[idx % TRUTH_COLORS.length]; });
+        userTruths.forEach(t => { t.color = truthTypeColor(t); });
         lastCheck = null;
         clearCheckResult();
         setStatus('Candidate deleted — affected truths removed.', 'info');
@@ -1567,7 +1567,7 @@ function setupDragHandlers() {
     const before = userTruths.length;
     userTruths = userTruths.filter(t => t.keys.every(k => cands[keyCell(k)].has(keyDigit(k))));
     if (userTruths.length !== before) {
-      userTruths.forEach((t, idx) => { t.color = TRUTH_COLORS[idx % TRUTH_COLORS.length]; });
+      userTruths.forEach(t => { t.color = truthTypeColor(t); });
       lastCheck = null;
       clearCheckResult();
     }
