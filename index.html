@@ -1,0 +1,1647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sudoku Move Visualizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Roboto', 'Helvetica Neue', sans-serif;
+  background: #fafafa;
+  color: #181818;
+  padding: 16px 20px;
+  min-height: 100vh;
+}
+
+body > * { max-width: 960px; margin-left: auto; margin-right: auto; }
+
+h1 { font-size: 1.2em; color: #181818; margin-bottom: 14px; font-weight: 500; letter-spacing: 0.02em; }
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  max-width: 900px;
+}
+
+#puzzle-input {
+  flex: 1;
+  min-width: 240px;
+  padding: 7px 11px;
+  font-family: monospace;
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #b0bec5;
+  border-radius: 4px;
+  color: #181818;
+  outline: none;
+}
+#puzzle-input:focus { border-color: #546e7a; }
+
+button {
+  padding: 7px 14px;
+  background: #546e7a;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: 'Roboto', 'Helvetica Neue', sans-serif;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+}
+button:hover { background: #607d8b; }
+button:disabled { background: #cfd8dc; color: #90a4ae; cursor: default; }
+
+.sep { color: #b0bec5; font-size: 18px; padding: 0 2px; user-select: none; }
+
+/* Mode buttons */
+.mode-btn { background: #eceff1; color: #546e7a; border: 1px solid #b0bec5; }
+.mode-btn:hover { background: #cfd8dc; color: #37474f; border-color: #78909c; }
+.mode-btn.active { background: #546e7a; color: #fff; border-color: #546e7a; }
+.mode-btn.active:hover { background: #607d8b; }
+
+.check-btn { background: #2e7d32; }
+.check-btn:hover { background: #388e3c; }
+
+/* ── Main layout ── */
+#main { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+
+/* ── Grid ── */
+#grid-wrap {
+  flex-shrink: 0;
+  position: relative;
+  width: 492px;
+  height: 492px;
+}
+
+#grid {
+  display: inline-grid;
+  grid-template-columns: repeat(9, 54px);
+  background: #fafafa;
+  position: absolute;
+  left: 3px; top: 3px;
+}
+
+.cell {
+  width: 54px; height: 54px;
+  background: #fafafa;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  transition: background 0.1s;
+  cursor: default;
+}
+.cell.sel { background: #e3f2fd; }
+
+#grid-lines-svg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.cell.given  .digit { font-size: 28px; font-weight: 500; color: #181818; }
+.cell.solved .digit { font-size: 28px; font-weight: 500; color: #2e7d32; }
+
+.candidates {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  width: 100%; height: 100%;
+  padding: 3px;
+}
+
+.cand {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: transparent;
+  line-height: 1;
+  border-radius: 2px;
+  transition: color 0.1s, background 0.1s;
+  user-select: none;
+}
+.cand.present { color: #78909c; }
+
+/* In edit mode, candidates show a delete cursor */
+body.edit-mode .cand.present { cursor: pointer; }
+body.edit-mode .cand.present:hover { background: rgba(220,80,80,0.12); color: #c62828; }
+
+/* In draw mode, candidates show a crosshair */
+body.draw-mode .cand.present { cursor: crosshair; }
+body.draw-mode .cand.present:hover { background: rgba(84,110,122,0.15); color: #37474f; }
+body.draw-mode .cell { cursor: crosshair; }
+
+/* SVG overlays */
+#truth-svg, #drag-svg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* ── Side panel ── */
+#side-panel {
+  flex: 1;
+  min-width: 280px;
+  max-width: 420px;
+}
+
+#status {
+  font-size: 12px;
+  color: #546e7a;
+  margin-bottom: 14px;
+  line-height: 1.5;
+  min-height: 18px;
+  display: flex; align-items: center; gap: 8px;
+}
+#status.ok   { color: #2e7d32; }
+#status.err  { color: #c62828; }
+#status.info { color: #1565c0; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 13px; height: 13px; flex-shrink: 0;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+#panel-title {
+  font-size: 0.88em;
+  font-weight: 600;
+  color: #546e7a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+#truth-list { margin-bottom: 16px; }
+
+.truth-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 5px;
+  background: #eceff1;
+  border: 1px solid #cfd8dc;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.truth-swatch {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.truth-label { flex: 1; color: #37474f; }
+.truth-del {
+  padding: 2px 6px;
+  font-size: 13px;
+  background: none;
+  color: #90a4ae;
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+}
+.truth-del:hover { background: #ffcdd2; color: #c62828; }
+
+.no-truths {
+  color: #78909c;
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 6px 0;
+}
+
+#check-result {
+  margin-top: 14px;
+  padding: 10px;
+  background: #eceff1;
+  border: 1px solid #cfd8dc;
+  border-radius: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #546e7a;
+  display: none;
+}
+#check-result.visible { display: block; }
+#check-result .cr-elims { color: #c62828; }
+#check-result .cr-covers { color: #1565c0; }
+#check-result .cr-head { color: #2e7d32; font-weight: 600; }
+#check-result .cr-none { color: #c62828; font-weight: 600; }
+#apply-elims-btn { margin-top: 10px; padding: 6px 14px; background: #c62828; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; }
+#apply-elims-btn:hover { background: #b71c1c; }
+
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body class="edit-mode">
+
+<h1>Sudoku Move Visualizer</h1>
+
+<div id="toolbar">
+  <input id="puzzle-input" type="text"
+    placeholder="81-digit string (0=empty)"
+    value="000000094760910050090002081070050010000709000080030067240100070010090045900000100">
+  <button onclick="loadPuzzle()">Load</button>
+  <button onclick="skipBasics()" style="background:#455a64">Skip Basics</button>
+  <span class="sep">|</span>
+  <button id="btn-edit" class="mode-btn active" onclick="setMode('edit')">Edit</button>
+  <button id="btn-draw" class="mode-btn" onclick="setMode('draw')">Draw Truths</button>
+  <span class="sep">|</span>
+  <button class="check-btn" onclick="checkMove()">Check Move</button>
+  <button onclick="clearTruths()" style="background:#bf360c">Clear Truths</button>
+</div>
+
+<div id="main">
+  <div id="grid-wrap">
+    <div id="grid"></div>
+    <svg id="grid-lines-svg"></svg>
+    <svg id="truth-svg"></svg>
+    <svg id="drag-svg"></svg>
+  </div>
+
+  <div id="side-panel">
+    <div id="status">Load a puzzle to begin.</div>
+    <div id="panel-title">Truths</div>
+    <div id="truth-list">
+      <div class="no-truths">No truths drawn yet.<br>Switch to Draw mode, then drag between candidates of the same digit in the same unit, or click a cell to mark it as a cell truth.</div>
+    </div>
+    <div class="btn-row">
+      <button class="check-btn" onclick="checkMove()" style="flex:1">Check Move</button>
+      <button onclick="removeLastTruth()" style="background:#3a2a1a">Undo Last</button>
+    </div>
+    <div id="check-result"></div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────
+
+let given      = new Array(81).fill(0);
+let cands      = Array.from({length: 81}, () => new Set());
+let solvedCells = new Set();
+let selIdx     = -1;
+let userMode   = 'edit'; // 'edit' | 'draw'
+let userTruths = [];     // [{keys, keySet, label, color, fromKey, toKey, isCellTruth}]
+let drawState  = null;   // {fromKey} while drag is in progress
+let lastCheck  = null;   // last checkMove result
+let solution   = null;   // null if puzzle has no unique solution, else 81-digit array
+
+const TRUTH_COLOR = '#1a7fff';
+const TRUTH_COLORS = [TRUTH_COLOR]; // kept for preview line only
+
+// Line color by truth type: col=green, row=purple, box=brown, cell=blue
+function truthTypeColor(truth) {
+  if (truth.isCellTruth) return '#1a7fff';          // blue
+  if (truth.unit < 9)   return '#a020f0';           // row → purple
+  if (truth.unit < 18)  return '#00b050';           // col → green
+  return '#c05800';                                  // box → orange-brown
+}
+
+// ── Geometry ───────────────────────────────────────────────────────────────
+
+const cellRow = i => Math.floor(i / 9);
+const cellCol = i => i % 9;
+const cellBox = i => Math.floor(cellRow(i) / 3) * 3 + Math.floor(cellCol(i) / 3);
+
+const UNIT_CELLS = Array.from({length: 27}, (_, u) => {
+  if (u < 9) return Array.from({length: 9}, (_, j) => u * 9 + j);
+  if (u < 18) { const c = u - 9; return Array.from({length: 9}, (_, j) => j * 9 + c); }
+  const b = u - 18, br = Math.floor(b / 3) * 3, bc = (b % 3) * 3;
+  const out = [];
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) out.push((br+r)*9+(bc+c));
+  return out;
+});
+
+const CELL_UNITS = Array.from({length: 81}, (_, i) =>
+  [cellRow(i), 9 + cellCol(i), 18 + cellBox(i)]);
+
+const PEERS = Array.from({length: 81}, (_, i) => {
+  const p = new Set();
+  for (const u of CELL_UNITS[i])
+    for (const c of UNIT_CELLS[u])
+      if (c !== i) p.add(c);
+  return p;
+});
+
+const unitName = u => u < 9 ? `Row ${u+1}` : u < 18 ? `Col ${u-8}` : `Box ${u-17}`;
+const cellName = i => `R${cellRow(i)+1}C${cellCol(i)+1}`;
+
+const candKey  = (cell, digit) => cell * 9 + (digit - 1);
+const keyCell  = k => Math.floor(k / 9);
+const keyDigit = k => (k % 9) + 1;
+
+// ── Combinations ───────────────────────────────────────────────────────────
+
+function* combos(arr, k) {
+  const n = arr.length;
+  if (k === 0) { yield []; return; }
+  if (k > n)   return;
+  const idx = Array.from({length: k}, (_, i) => i);
+  while (true) {
+    yield idx.map(i => arr[i]);
+    let i = k - 1;
+    while (i >= 0 && idx[i] === n - k + i) i--;
+    if (i < 0) break;
+    idx[i]++;
+    for (let j = i + 1; j < k; j++) idx[j] = idx[j-1] + 1;
+  }
+}
+
+function binomCoeff(n, k) {
+  if (k > n || k < 0) return 0;
+  k = Math.min(k, n - k);
+  let c = 1;
+  for (let i = 0; i < k; i++) c = c * (n - i) / (i + 1);
+  return c;
+}
+
+// ── All sets (for checkMove) ───────────────────────────────────────────────
+
+function buildAllSets() {
+  const sets = [];
+
+  for (let d = 1; d <= 9; d++) {
+    for (let u = 0; u < 27; u++) {
+      const cells = UNIT_CELLS[u].filter(i => cands[i].has(d));
+      if (!cells.length) continue;
+      const keys = cells.map(i => candKey(i, d));
+      sets.push({ type: 'digit-unit', digit: d, unit: u,
+        label: `${d}∈${unitName(u)}`, keys, keySet: new Set(keys) });
+    }
+  }
+
+  for (let i = 0; i < 81; i++) {
+    if (given[i] || !cands[i].size) continue;
+    const keys = [...cands[i]].map(d => candKey(i, d));
+    sets.push({ type: 'cell', cell: i,
+      label: cellName(i), keys, keySet: new Set(keys) });
+  }
+
+  const keyToSets = new Map();
+  for (const s of sets)
+    for (const k of s.keys) {
+      if (!keyToSets.has(k)) keyToSets.set(k, []);
+      keyToSets.get(k).push(s);
+    }
+
+  return { sets, keyToSets };
+}
+
+// ── Core solving ───────────────────────────────────────────────────────────
+
+function initCandidates() {
+  cands = Array.from({length: 81}, () => new Set([1,2,3,4,5,6,7,8,9]));
+  for (let i = 0; i < 81; i++) {
+    if (!given[i]) continue;
+    cands[i] = new Set();
+    for (const u of CELL_UNITS[i])
+      for (const p of UNIT_CELLS[u])
+        if (p !== i) cands[p].delete(given[i]);
+  }
+}
+
+function placeDigit(i, d) {
+  given[i] = d;
+  solvedCells.add(i);
+  cands[i] = new Set();
+  for (const u of CELL_UNITS[i])
+    for (const p of UNIT_CELLS[u])
+      if (p !== i) cands[p].delete(d);
+}
+
+function skipBasics() {
+  let progress = true;
+  while (progress) {
+    progress = false;
+
+    for (let i = 0; i < 81; i++) {
+      if (!given[i] && cands[i].size === 1) { placeDigit(i, [...cands[i]][0]); progress = true; }
+    }
+
+    for (let u = 0; u < 27; u++) {
+      for (let d = 1; d <= 9; d++) {
+        const cells = UNIT_CELLS[u].filter(i => cands[i].has(d));
+        if (cells.length === 1 && !given[cells[0]]) { placeDigit(cells[0], d); progress = true; }
+      }
+    }
+
+    for (let u = 0; u < 27; u++) {
+      const uSet = new Set(UNIT_CELLS[u]);
+      for (let d = 1; d <= 9; d++) {
+        const cells = UNIT_CELLS[u].filter(i => cands[i].has(d));
+        if (cells.length < 2) continue;
+        if (u >= 18) {
+          const rows = new Set(cells.map(cellRow));
+          if (rows.size === 1)
+            for (const i of UNIT_CELLS[[...rows][0]])
+              if (!uSet.has(i) && cands[i].has(d)) { cands[i].delete(d); progress = true; }
+          const cols = new Set(cells.map(cellCol));
+          if (cols.size === 1)
+            for (const i of UNIT_CELLS[9 + [...cols][0]])
+              if (!uSet.has(i) && cands[i].has(d)) { cands[i].delete(d); progress = true; }
+        }
+        if (u < 18) {
+          const boxes = new Set(cells.map(cellBox));
+          if (boxes.size === 1)
+            for (const i of UNIT_CELLS[18 + [...boxes][0]])
+              if (!uSet.has(i) && cands[i].has(d)) { cands[i].delete(d); progress = true; }
+        }
+      }
+    }
+
+    for (let u = 0; u < 27; u++) {
+      const empty = UNIT_CELLS[u].filter(i => !given[i] && cands[i].size > 0);
+      for (let size = 2; size <= Math.min(5, empty.length - 1); size++) {
+        for (const subset of combos(empty, size)) {
+          const union = new Set(subset.flatMap(i => [...cands[i]]));
+          if (union.size === size)
+            for (const i of empty)
+              if (!subset.includes(i))
+                for (const d of union)
+                  if (cands[i].has(d)) { cands[i].delete(d); progress = true; }
+        }
+      }
+    }
+
+    for (let u = 0; u < 27; u++) {
+      const empty = UNIT_CELLS[u].filter(i => !given[i] && cands[i].size > 0);
+      const digits = [...new Set(empty.flatMap(i => [...cands[i]]))];
+      for (let size = 2; size <= Math.min(5, digits.length - 1); size++) {
+        for (const ds of combos(digits, size)) {
+          const dsSet = new Set(ds);
+          const cells = empty.filter(i => ds.some(d => cands[i].has(d)));
+          if (cells.length === size)
+            for (const i of cells)
+              for (const d of [...cands[i]])
+                if (!dsSet.has(d)) { cands[i].delete(d); progress = true; }
+        }
+      }
+    }
+  }
+
+  // Invalidate any truths that reference deleted candidates
+  userTruths = userTruths.filter(t =>
+    t.keys.every(k => cands[keyCell(k)].has(keyDigit(k)))
+  );
+  lastCheck = null;
+  buildGrid();
+  applyAllHighlights();
+  renderTruthPanel();
+  renderTruthSVG();
+  setStatus('Basics applied.', 'info');
+}
+
+// ── Mode ───────────────────────────────────────────────────────────────────
+
+function setMode(m) {
+  userMode = m;
+  drawState = null;
+  clearDragLine();
+  document.getElementById('btn-edit').classList.toggle('active', m === 'edit');
+  document.getElementById('btn-draw').classList.toggle('active', m === 'draw');
+  document.body.className = m === 'edit' ? 'edit-mode' : 'draw-mode';
+  // Deselect cell when switching away from edit
+  if (m !== 'edit') {
+    selIdx = -1;
+    document.querySelectorAll('.cell.sel').forEach(el => el.classList.remove('sel'));
+  }
+}
+
+// ── Truth management ───────────────────────────────────────────────────────
+
+function truthFromDrag(fromKey, toKey) {
+  if (fromKey === toKey) return null;
+  const c1 = keyCell(fromKey), d1 = keyDigit(fromKey);
+  const c2 = keyCell(toKey),   d2 = keyDigit(toKey);
+
+  if (c1 === c2) {
+    // Same cell → cell truth
+    if (cands[c1].size < 2) return null;
+    const keys = [...cands[c1]].sort((a,b)=>a-b).map(d => candKey(c1, d));
+    return { isCellTruth: true, keys, keySet: new Set(keys),
+             label: `Cell ${cellName(c1)}`, fromKey, toKey: keys[keys.length - 1] };
+  }
+
+  if (d1 !== d2) return null;
+
+  // Must share a unit
+  const commonUnit = CELL_UNITS[c1].find(u => UNIT_CELLS[u].includes(c2));
+  if (commonUnit === undefined) return null;
+
+  const cells = UNIT_CELLS[commonUnit].filter(i => cands[i].has(d1));
+  if (!cells.length) return null;
+  const keys = cells.map(i => candKey(i, d1));
+  return { isCellTruth: false, digit: d1, unit: commonUnit,
+           keys, keySet: new Set(keys),
+           label: `${d1} in ${unitName(commonUnit)}`, fromKey, toKey };
+}
+
+function cellTruthFromClick(cellIdx) {
+  if (given[cellIdx] || cands[cellIdx].size < 2) return null;
+  const keys = [...cands[cellIdx]].sort((a,b)=>a-b).map(d => candKey(cellIdx, d));
+  return { isCellTruth: true, keys, keySet: new Set(keys),
+           label: `Cell ${cellName(cellIdx)}`,
+           fromKey: keys[0], toKey: keys[keys.length - 1] };
+}
+
+function registerTruth(truth) {
+  if (!truth) return false;
+  const ks = [...truth.keySet].sort().join(',');
+  if (userTruths.some(t => [...t.keySet].sort().join(',') === ks)) {
+    setStatus('That truth is already established.', 'err');
+    return false;
+  }
+  truth.color = truthTypeColor(truth);
+  userTruths.push(truth);
+  lastCheck = null;
+  buildGrid();
+  applyAllHighlights();
+  renderTruthSVG();
+  renderTruthPanel();
+  clearCheckResult();
+  setStatus(`Added: ${truth.label}`, 'info');
+  return true;
+}
+
+function removeTruth(idx) {
+  userTruths.splice(idx, 1);
+  // Re-assign colors to keep them consistent
+  userTruths.forEach(t => { t.color = truthTypeColor(t); });
+  lastCheck = null;
+  buildGrid();
+  applyAllHighlights();
+  renderTruthSVG();
+  renderTruthPanel();
+  clearCheckResult();
+  setStatus('Truth removed.', 'info');
+}
+
+function removeLastTruth() {
+  if (userTruths.length) removeTruth(userTruths.length - 1);
+}
+
+function clearTruths() {
+  userTruths = [];
+  lastCheck = null;
+  buildGrid();
+  applyAllHighlights();
+  renderTruthSVG();
+  renderTruthPanel();
+  clearCheckResult();
+  setStatus('Truths cleared.', 'info');
+}
+
+// ── Check Move ─────────────────────────────────────────────────────────────
+
+function checkMove() {
+  clearCheckResult();
+  if (!userTruths.length) {
+    setStatus('No truths defined — add truths in Draw mode first.', 'err');
+    return;
+  }
+  setChecking();
+  setTimeout(_checkMoveWork, 30);
+}
+
+function _checkMoveWork() {
+  try { _checkMoveImpl(); } finally { clearChecking(); }
+}
+
+function _checkMoveImpl() {
+
+  const n = userTruths.length;
+  const baseKeyArr = userTruths.flatMap(t => t.keys);
+  const baseKeySet = new Set(baseKeyArr);
+
+  const { keyToSets } = buildAllSets();
+
+  const potCoverSet = new Set();
+  for (const k of baseKeySet)
+    for (const s of keyToSets.get(k) || [])
+      potCoverSet.add(s);
+
+  const truthSigs = new Set(userTruths.map(t => [...t.keySet].sort().join(',')));
+  const potCovers = [...potCoverSet].filter(s =>
+    !truthSigs.has([...s.keySet].sort().join(','))
+  );
+
+  // Precompute per-cover which base keys it touches (avoids iterating full keySet in dfs)
+  for (const c of potCovers)
+    c._baseKeys = [...c.keySet].filter(k => baseKeySet.has(k));
+
+  // Precompute: which potCovers contain each base key?
+  // Sort by base-key coverage descending so the DFS tries the most efficient cover first,
+  // dramatically reducing the nodes needed to find rank-0 solutions.
+  const coverersOf = new Map();
+  for (const k of baseKeySet)
+    coverersOf.set(k, potCovers.filter(c => c.keySet.has(k))
+      .sort((a, b) => b._baseKeys.length - a._baseKeys.length));
+
+  // O(1) cover→index lookup for sig building (replaces O(P) indexOf)
+  const coverIndex = new Map(potCovers.map((c, i) => [c, i]));
+
+  // Verify a 1-to-1 cover↔truth matching exists (pigeonhole requires bijection)
+  function hasPerfectCoverTruthMatching(covers, truths) {
+    const used = new Array(truths.length).fill(false);
+    function match(ci) {
+      if (ci === covers.length) return true;
+      const ck = covers[ci].keySet;
+      for (let ti = 0; ti < truths.length; ti++) {
+        if (used[ti]) continue;
+        let hit = false;
+        for (const k of truths[ti].keySet) { if (ck.has(k)) { hit = true; break; } }
+        if (hit) { used[ti] = true; if (match(ci + 1)) return true; used[ti] = false; }
+      }
+      return false;
+    }
+    return match(0);
+  }
+
+  // Skip rank-0 DFS for large structures: it's exponential and rank-0 with many truths
+  // is practically impossible. checkByTruthAssignment finds the same eliminations.
+  const RANK0_DFS_MAX_TRUTHS = 8;
+  const skipRank0DFS = n > RANK0_DFS_MAX_TRUTHS;
+
+  const MAX_M = n + 3;
+  let rank0FoundAtNode = -1;
+  let nodes = 0;
+  let hitLimit = false;
+
+  // Rank-0 requires n distinct satisfiers (one per truth). If any truth key appears in
+  // more than one truth, a single placed digit can satisfy multiple truths simultaneously,
+  // reducing the satisfier count below n and invalidating the pigeonhole argument.
+  const truthKeyTruthCount = new Map();
+  for (const t of userTruths) for (const k of t.keys) truthKeyTruthCount.set(k, (truthKeyTruthCount.get(k) || 0) + 1);
+  const hasOverlappingTruthKeys = [...truthKeyTruthCount.values()].some(c => c > 1);
+
+  // byM[m] = { count, keyCounts: Map<key, hitCount>, exampleCovers }
+  const byM = new Map();
+  const seenSigs = new Set();
+
+  const remaining = new Set(baseKeySet);
+  const chosen = [], chosenSet = new Set();
+
+  // Incremental available-coverer counts: availCount[k] = |covers for k not yet chosen|
+  // Updated on push/pop so MCV selection is O(|remaining|) instead of O(|remaining|×coverers)
+  const availCount = new Map();
+  for (const k of baseKeySet) availCount.set(k, coverersOf.get(k).length);
+
+  function recordCovering() {
+    const sig = chosen.map(c => coverIndex.get(c)).sort((a, b) => a - b).join(',');
+    if (seenSigs.has(sig)) return;
+    seenSigs.add(sig);
+
+    const m = chosen.length;
+    if (!byM.has(m)) byM.set(m, { count: 0, keyCounts: new Map(), exampleCovers: null });
+    const entry = byM.get(m);
+
+    // Rank-0 requires pigeonhole bijection: each cover must map to exactly one truth.
+    // With overlapping truths a single cover can satisfy multiple truths, breaking the
+    // guarantee. Skip the elimination count for invalid bijections.
+    // Also skip if truth keys overlap (shared key satisfies multiple truths simultaneously,
+    // collapsing n satisfiers to <n and invalidating the pigeonhole).
+    if (m === n && (hasOverlappingTruthKeys || !hasPerfectCoverTruthMatching(chosen, userTruths))) return;
+
+    entry.count++;
+    if (m === n && rank0FoundAtNode < 0) rank0FoundAtNode = nodes;
+    const assignElims = new Set();
+    for (const c of chosen)
+      for (const k of c.keys)
+        if (!baseKeySet.has(k) && cands[keyCell(k)].has(keyDigit(k)))
+          assignElims.add(k);
+    for (const k of assignElims)
+      entry.keyCounts.set(k, (entry.keyCounts.get(k) || 0) + 1);
+
+    if (!entry.exampleCovers) entry.exampleCovers = [...chosen];
+  }
+
+  function dfs() {
+    if (++nodes > 50_000_000) { hitLimit = true; return; }
+
+    if (remaining.size === 0) {
+      recordCovering();
+      return;
+    }
+
+    if (chosen.length >= MAX_M) return;
+
+    // MCV: O(|remaining|) using precomputed availCount
+    let minKey = -1, minCount = Infinity;
+    for (const k of remaining) {
+      const cnt = availCount.get(k);
+      if (cnt === 0) return; // dead end
+      if (cnt < minCount) { minCount = cnt; minKey = k; }
+    }
+
+    for (const cover of coverersOf.get(minKey)) {
+      if (chosenSet.has(cover)) continue;
+      if (hitLimit) return;
+
+      // Cover keys removed from remaining
+      const nowCovered = [];
+      for (const k of remaining) if (cover.keySet.has(k)) nowCovered.push(k);
+      for (const k of nowCovered) remaining.delete(k);
+
+      // Decrement availCount for all base keys this cover touches
+      for (const k of cover._baseKeys) availCount.set(k, availCount.get(k) - 1);
+
+      chosen.push(cover); chosenSet.add(cover);
+      dfs();
+      chosen.pop(); chosenSet.delete(cover);
+
+      for (const k of cover._baseKeys) availCount.set(k, availCount.get(k) + 1);
+      for (const k of nowCovered) remaining.add(k);
+    }
+  }
+
+  if (!skipRank0DFS) dfs();
+
+  // Only include m values where at least one valid covering was recorded (count > 0).
+  // Rejected rank-0 coverings leave count=0 in byM and must not influence the rank.
+  const sortedMs = [...byM.entries()].filter(([, e]) => e.count > 0).map(([m]) => m).sort((a, b) => a - b);
+  const rank0 = byM.get(n); // m === n means rank-0 (only if bijection held)
+
+  // Rank-0 pigeonhole eliminations (may be empty even when rank-0 is found)
+  let rank0Elims = [];
+  let rank0Meta = null;
+  if (rank0 && rank0.count > 0) {
+    const { count, keyCounts, exampleCovers } = rank0;
+    rank0Elims = [...keyCounts.entries()]
+      .filter(([, c]) => c === count)
+      .map(([k]) => [keyCell(k), keyDigit(k)]);
+    rank0Meta = { covers: exampleCovers, count };
+  }
+
+  // Always run contradiction + assignment checks to catch forcing-chain eliminations
+  // that the pigeonhole argument alone may miss.
+  const minM = sortedMs[0];
+  const contrElims = checkByContradiction(baseKeySet, userTruths);
+  const assignElims = checkByTruthAssignment(userTruths);
+
+  // Merge all eliminations, deduplicating by candidate key
+  const elimSet = new Set(rank0Elims.map(([c,d]) => candKey(c,d)));
+  for (const [c,d] of contrElims) elimSet.add(candKey(c,d));
+  for (const [c,d] of assignElims) elimSet.add(candKey(c,d));
+  const allElims = [...elimSet].map(k => [keyCell(k), keyDigit(k)]);
+
+
+  if (allElims.length > 0) {
+    const isRank0 = rank0Meta !== null;
+    const hasChains = contrElims.length > 0 || assignElims.length > 0;
+    let statusMsg, resultObj;
+    if (isRank0) {
+      const { covers, count } = rank0Meta;
+      const chainNote = hasChains ? ' + forcing chains' : '';
+      statusMsg = `✓ Valid! Rank-0${chainNote} — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} across ${count} valid cover assignment${count !== 1 ? 's' : ''}.`;
+      resultObj = { covers, elims: allElims, rank: 0, assignmentCount: count };
+    } else {
+      const rankNote = minM !== undefined ? ` (rank-${minM - n} structure)` : '';
+      statusMsg = `✓ Valid${rankNote} — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} via truth forcing chains.`;
+      resultObj = { covers: null, elims: allElims, rank: null, assignmentCount: null };
+    }
+    lastCheck = resultObj;
+    buildGrid(); applyAllHighlights();
+    showCheckResult(resultObj, potCovers.length);
+    setStatus(statusMsg, 'ok');
+    return;
+  }
+
+  if (hitLimit) {
+    setStatus(`Search hit the node limit and no forcing eliminations found.`, 'err');
+  } else if (minM !== undefined) {
+    const minRank = minM - n;
+    setStatus(`No rank-0 structure and no forcing eliminations found — needs ${minM} covers for ${n} truths (rank-${minRank}).`, 'err');
+  } else {
+    setStatus(`No forcing eliminations found — structure rank exceeds search depth (${MAX_M - n}).`, 'err');
+  }
+  showCheckResult(null, potCovers.length);
+} // end _checkMoveImpl
+
+// For each non-base candidate X, assume X is true, propagate Sudoku constraints
+// through truth-forced placements, and check for contradiction.
+// Returns [[cell, digit], ...] of candidates that must be false.
+function checkByContradiction(baseKeySet, userTruths) {
+  const forcedElims = [];
+
+  // A "digit truth" is a truth whose keys all share the same digit (row/col/box truth).
+  // Cell truths have mixed digits.
+  const digitTruthKeys = new Set();
+  const cellTruthCells = new Set();
+  for (const t of userTruths) {
+    const digits = new Set(t.keys.map(k => keyDigit(k)));
+    if (digits.size === 1) for (const k of t.keys) digitTruthKeys.add(k);
+    else for (const k of t.keys) cellTruthCells.add(keyCell(k));
+  }
+
+  // Only test candidate (cell, digit) if it has a direct connection to the truth network:
+  //   Digit-truth connections:
+  //   (a) the cell itself contains another candidate that is a digit-truth key, OR
+  //   (b) placing digit at cell would eliminate a digit-truth key in a peer cell.
+  //   Cell-truth connections:
+  //   (c) cell is itself a cell-truth cell, OR
+  //   (d) placing digit at cell would eliminate a candidate from a cell-truth peer.
+  // This prevents spurious eliminations driven by unrelated branching.
+  function isRelevantCandidate(cell, digit) {
+    // (a) cell has a sibling candidate that is a digit-truth key
+    for (const d2 of cands[cell]) {
+      if (d2 !== digit && digitTruthKeys.has(candKey(cell, d2))) return true;
+    }
+    for (const u of CELL_UNITS[cell]) {
+      for (const peer of UNIT_CELLS[u]) {
+        if (peer === cell) continue;
+        // (b) placing digit here eliminates a digit-truth key in some peer
+        if (digitTruthKeys.has(candKey(peer, digit))) return true;
+        // (d) placing digit here eliminates a candidate from a cell-truth peer
+        if (cellTruthCells.has(peer) && cands[peer].has(digit)) return true;
+      }
+    }
+    // (c) cell is a cell-truth cell
+    if (cellTruthCells.has(cell)) return true;
+    return false;
+  }
+
+  // Per-candidate node budget — reset before each outer-loop candidate.
+  // Keeps search fast: contradictions are found early; non-contradictions bail out.
+  let budget = 0;
+  const MAX_BUDGET = 50000;
+
+  // BFS propagation + recursive branching on 2-candidate truths/bivalue cells.
+  // Returns true if the given initial placements (queue) inevitably lead to a
+  // contradiction with the truths, given the already-known eliminated/placed state.
+  // depth controls how many additional case-split levels are allowed.
+  function leadsToContradiction(eliminated, placed, initialQueue, depth) {
+    const elim = new Set(eliminated);
+    const plac = new Map(placed);
+    const q = [...initialQueue];
+    let qi = 0;
+    let contradiction = false;
+
+    while (qi < q.length && !contradiction) {
+      const [pc, pd] = q[qi++];
+      if (elim.has(candKey(pc, pd))) { contradiction = true; break; }
+      if (plac.has(pc)) {
+        if (plac.get(pc) !== pd) { contradiction = true; break; }
+        continue;
+      }
+      plac.set(pc, pd);
+
+      for (const d2 of cands[pc]) {
+        if (d2 !== pd) elim.add(candKey(pc, d2));
+      }
+      for (const u of CELL_UNITS[pc]) {
+        for (const peer of UNIT_CELLS[u]) {
+          if (peer === pc || !cands[peer].has(pd)) continue;
+          if (plac.has(peer) && plac.get(peer) === pd) { contradiction = true; break; }
+          elim.add(candKey(peer, pd));
+        }
+        if (contradiction) break;
+      }
+      if (contradiction) break;
+
+      for (const truth of userTruths) {
+        const remaining = truth.keys.filter(tk => !elim.has(tk));
+        if (remaining.length === 0) { contradiction = true; break; }
+        if (remaining.length === 1) {
+          const fc = keyCell(remaining[0]), fd = keyDigit(remaining[0]);
+          if (!plac.has(fc)) q.push([fc, fd]);
+          else if (plac.get(fc) !== fd) { contradiction = true; break; }
+        }
+      }
+    }
+
+    if (contradiction) return true;
+    if (depth === 0) return false;
+
+    // Propagation stalled. Branch on any 2-option choice (truth or bivalue cell):
+    // if both options lead to contradiction, the current branch is impossible.
+
+    // Branch on truths with exactly 2 remaining candidates
+    for (const truth of userTruths) {
+      const remaining = truth.keys.filter(tk => !elim.has(tk));
+      if (remaining.length === 2) {
+        if (++budget > MAX_BUDGET) return false;
+        const [k0, k1] = remaining;
+        if (leadsToContradiction(elim, plac, [[keyCell(k0), keyDigit(k0)]], depth - 1) &&
+            leadsToContradiction(elim, plac, [[keyCell(k1), keyDigit(k1)]], depth - 1))
+          return true;
+      }
+    }
+
+    // Branch on cells reduced to exactly 2 remaining candidates
+    for (let cell = 0; cell < 81; cell++) {
+      if (plac.has(cell)) continue;
+      const rem = [];
+      for (const d of cands[cell]) { if (!elim.has(candKey(cell, d))) rem.push(d); if (rem.length > 2) break; }
+      if (rem.length === 2) {
+        if (++budget > MAX_BUDGET) return false;
+        if (leadsToContradiction(elim, plac, [[cell, rem[0]]], depth - 1) &&
+            leadsToContradiction(elim, plac, [[cell, rem[1]]], depth - 1))
+          return true;
+      }
+    }
+
+    return false;
+  }
+
+  const MAX_DEPTH = 0;
+
+  for (let cell = 0; cell < 81; cell++) {
+    for (const digit of cands[cell]) {
+      if (!isRelevantCandidate(cell, digit)) continue;
+      budget = 0;
+      if (leadsToContradiction(new Set(), new Map(), [[cell, digit]], MAX_DEPTH))
+        forcedElims.push([cell, digit]);
+    }
+  }
+
+  return forcedElims;
+}
+
+// Enumerate all valid truth-satisfier assignments (one candidate per truth, mutually
+// consistent under Sudoku unit constraints) and eliminate any candidate that never
+// appears in any assignment.  Only runs when truths are small enough to be tractable.
+function checkByTruthAssignment(userTruths) {
+  const n = userTruths.length;
+  const ASSIGN_TIME_LIMIT_MS = 5000;
+  const assignStart = performance.now();
+  let assignTimedOut = false;
+
+  // Running intersection of forced eliminations across all valid assignments.
+  // A candidate is eliminated iff every valid assignment (after Sudoku propagation)
+  // forces it out — this captures eliminations both inside and outside the truth network.
+  let commonElim = null; // null = no assignment seen yet
+
+  const chosen = new Array(n);
+  const usedCells = new Set();
+  const unitDigit = new Map();
+
+  function place(key) {
+    const cell = keyCell(key), digit = keyDigit(key);
+    for (const u of CELL_UNITS[cell]) {
+      if (unitDigit.has(u * 10 + digit)) return false;
+    }
+    usedCells.add(cell);
+    for (const u of CELL_UNITS[cell]) unitDigit.set(u * 10 + digit, true);
+    return true;
+  }
+  function unplace(key) {
+    const cell = keyCell(key), digit = keyDigit(key);
+    usedCells.delete(cell);
+    for (const u of CELL_UNITS[cell]) unitDigit.delete(u * 10 + digit);
+  }
+
+  // BFS from a complete assignment: propagate Sudoku constraints (placed digits
+  // eliminate peers; naked singles cascade) plus truth forcing (a truth reduced to
+  // 1 remaining key must be placed).
+  // Returns the set of eliminated candidate keys, or null if the propagation
+  // reaches a Sudoku contradiction (meaning this assignment is unrealisable and
+  // must be excluded from the intersection to avoid false positives).
+  function propagateAssignment() {
+    const elim = new Set();
+    const plac = new Map();
+    let contradiction = false;
+
+    function eliminate(cell, digit) {
+      if (!cands[cell].has(digit)) return;
+      const k = candKey(cell, digit);
+      elim.add(k);
+    }
+
+    const q = chosen.map(k => [keyCell(k), keyDigit(k)]);
+    let qi = 0;
+    while (qi < q.length && !contradiction) {
+      const [pc, pd] = q[qi++];
+      if (plac.has(pc)) {
+        if (plac.get(pc) !== pd) { contradiction = true; break; }
+        continue;
+      }
+      // Candidate eliminated by a peer already placed — genuine truth-network conflict
+      if (elim.has(candKey(pc, pd))) { contradiction = true; break; }
+      plac.set(pc, pd);
+
+      for (const d2 of cands[pc]) { if (d2 !== pd) eliminate(pc, d2); }
+      for (const u of CELL_UNITS[pc]) {
+        for (const peer of UNIT_CELLS[u]) {
+          if (peer === pc || !cands[peer].has(pd) || plac.has(peer)) continue;
+          eliminate(peer, pd);
+        }
+      }
+      // Truth forcing: a truth reduced to 1 remaining key must be placed
+      for (const truth of userTruths) {
+        const rem = truth.keys.filter(k => !elim.has(k));
+        if (rem.length === 0) { contradiction = true; break; }
+        if (rem.length === 1 && !plac.has(keyCell(rem[0])))
+          q.push([keyCell(rem[0]), keyDigit(rem[0])]);
+      }
+    }
+    return contradiction ? null : elim;
+  }
+
+  function search(ti) {
+    if (assignTimedOut) return;
+    if ((ti & 0x7) === 0 && performance.now() - assignStart > ASSIGN_TIME_LIMIT_MS) {
+      assignTimedOut = true; return;
+    }
+    if (ti === n) {
+      const elim = propagateAssignment();
+      if (elim === null) return; // contradictory assignment — skip, don't pollute intersection
+      if (commonElim === null) {
+        commonElim = elim;
+      } else {
+        for (const k of commonElim) { if (!elim.has(k)) commonElim.delete(k); }
+        if (commonElim.size === 0) { assignTimedOut = true; } // intersection empty, stop early
+      }
+      return;
+    }
+    // Iterate all keys: handle shared satisfiers (cell already placed by a
+    // prior truth with the same key) inline, and try independent satisfiers too.
+    // Previously we returned early after the first shared satisfier, which skipped
+    // valid assignments where this truth is independently satisfied.
+    const truth = userTruths[ti];
+    for (const key of truth.keys) {
+      if (assignTimedOut) return;
+      const cell = keyCell(key);
+      if (usedCells.has(cell)) {
+        // Cell is occupied — only valid if the exact same key was already chosen
+        let shared = false;
+        for (let j = 0; j < ti; j++) { if (chosen[j] === key) { shared = true; break; } }
+        if (!shared) continue;
+        chosen[ti] = key;
+        search(ti + 1);
+        // No unplace needed — we didn't place anything new
+        continue;
+      }
+      if (!place(key)) continue;
+      chosen[ti] = key;
+      search(ti + 1);
+      unplace(key);
+    }
+  }
+
+  search(0);
+  if (assignTimedOut || commonElim === null) return [];
+
+  const elims = [];
+  for (const k of commonElim) {
+    const cell = keyCell(k), digit = keyDigit(k);
+    if (cands[cell].has(digit)) elims.push([cell, digit]);
+  }
+  return elims;
+}
+
+function showCheckResult(result, numPC, numFound) {
+  const el = document.getElementById('check-result');
+  if (!result) {
+    el.innerHTML = `<span class="cr-none">No eliminations</span><br><small>Searched ${numPC} potential covers.</small>`;
+    el.classList.add('visible');
+    return;
+  }
+  const elimsByCell = new Map();
+  for (const [c, d] of result.elims) {
+    if (!elimsByCell.has(c)) elimsByCell.set(c, []);
+    elimsByCell.get(c).push(d);
+  }
+  const elimDesc = [...elimsByCell.entries()]
+    .map(([c, ds]) => `${cellName(c)}(${ds.sort((a,b)=>a-b).join(',')})`)
+    .join(', ');
+  const rankTag = result.rank === 0 ? 'Rank-0' : result.rank !== null ? `Rank-${result.rank}` : 'Forcing chains';
+  const countNote = result.assignmentCount > 1 ? ` · ${result.assignmentCount} valid assignments` : '';
+  const coverLine = result.covers
+    ? `<div><span style="color:#889">Example covers:</span> <span class="cr-covers">${result.covers.map(c => c.label).join(', ')}</span></div>`
+    : `<div><span style="color:#889">Method:</span> truth forcing chain (case-split)</div>`;
+  el.innerHTML =
+    `<div class="cr-head">✓ ${rankTag}${countNote}</div>` +
+    `<div><span style="color:#889">Eliminate:</span> <span class="cr-elims">${elimDesc}</span></div>` +
+    coverLine +
+    `<button id="apply-elims-btn" onclick="applyEliminations()">Apply Eliminations</button>`;
+  el.classList.add('visible');
+}
+
+function applyEliminations() {
+  if (!lastCheck) return;
+  for (const [cell, digit] of lastCheck.elims)
+    cands[cell].delete(digit);
+  lastCheck = null;
+  buildGrid();
+  applyAllHighlights();
+  clearCheckResult();
+}
+
+function clearCheckResult() {
+  document.getElementById('check-result').classList.remove('visible');
+}
+
+// ── Grid rendering ─────────────────────────────────────────────────────────
+
+function buildGrid() {
+  const gridEl = document.getElementById('grid');
+  gridEl.innerHTML = '';
+
+  for (let i = 0; i < 81; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (i === selIdx ? ' sel' : '');
+    cell.dataset.idx = i;
+    cell.dataset.row = cellRow(i);
+    cell.dataset.col = cellCol(i);
+
+    if (given[i]) {
+      cell.classList.add(solvedCells.has(i) ? 'solved' : 'given');
+      const d = document.createElement('span');
+      d.className = 'digit';
+      d.textContent = given[i];
+      cell.appendChild(d);
+    } else {
+      const cg = document.createElement('div');
+      cg.className = 'candidates';
+      for (let v = 1; v <= 9; v++) {
+        const span = document.createElement('span');
+        span.className = 'cand' + (cands[i].has(v) ? ' present' : '');
+        span.dataset.val = v;
+        span.textContent = cands[i].has(v) ? v : '';
+        // Nudge each candidate so all 9 have unique x AND unique y positions,
+        // preventing truth lines from overlapping regardless of direction.
+        const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = 3;
+        span.style.transform = `translate(${(ri - 1) * N}px, ${(1 - ci) * N}px)`;
+        cg.appendChild(span);
+      }
+      cell.appendChild(cg);
+    }
+
+    gridEl.appendChild(cell);
+  }
+  drawGridLines();
+}
+
+function drawGridLines() {
+  const svg = document.getElementById('grid-lines-svg');
+  svg.innerHTML = '';
+  const NS = 'http://www.w3.org/2000/svg';
+  const COLOR = '#72787b';
+  const CELL = 54, BORDER = 3, INNER = 1, BOX = 3;
+  const OFF = BORDER; // cells start at 3px offset (outer border width)
+  const SIZE = 9 * CELL; // 486px
+
+  // Outer border rect (stroke centered on the rect edge)
+  const outer = document.createElementNS(NS, 'rect');
+  outer.setAttribute('x', BORDER / 2);
+  outer.setAttribute('y', BORDER / 2);
+  outer.setAttribute('width',  SIZE + BORDER);
+  outer.setAttribute('height', SIZE + BORDER);
+  outer.setAttribute('fill', 'none');
+  outer.setAttribute('stroke', COLOR);
+  outer.setAttribute('stroke-width', BORDER);
+  svg.appendChild(outer);
+
+  // Inner grid lines
+  for (let i = 1; i < 9; i++) {
+    const pos = OFF + i * CELL;
+    const w = (i % 3 === 0) ? BOX : INNER;
+    // Horizontal line at row boundary i
+    const hl = document.createElementNS(NS, 'line');
+    hl.setAttribute('x1', OFF); hl.setAttribute('y1', pos);
+    hl.setAttribute('x2', OFF + SIZE); hl.setAttribute('y2', pos);
+    hl.setAttribute('stroke', COLOR); hl.setAttribute('stroke-width', w);
+    svg.appendChild(hl);
+    // Vertical line at column boundary i
+    const vl = document.createElementNS(NS, 'line');
+    vl.setAttribute('x1', pos); vl.setAttribute('y1', OFF);
+    vl.setAttribute('x2', pos); vl.setAttribute('y2', OFF + SIZE);
+    vl.setAttribute('stroke', COLOR); vl.setAttribute('stroke-width', w);
+    svg.appendChild(vl);
+  }
+}
+
+function applyAllHighlights() {
+  // Apply truth colors
+  for (const truth of userTruths) {
+    for (const k of truth.keys) {
+      const el = candEl(k);
+      if (el) {
+        el.style.background  = TRUTH_COLOR;
+        el.style.color       = '#fff';
+        el.style.fontWeight  = '700';
+        el.style.borderRadius= '2px';
+        el.style.width       = '14px';
+        el.style.height      = '14px';
+        el.style.justifySelf = 'center';
+        el.style.alignSelf   = 'center';
+        el.style.position    = 'relative';
+        el.style.zIndex      = '1';
+      }
+    }
+  }
+  // Apply check eliminations (override truth color if needed)
+  if (lastCheck) {
+    const baseKeySet = new Set(userTruths.flatMap(t => t.keys));
+    for (const [c, d] of lastCheck.elims) {
+      const k = candKey(c, d);
+      const el = candEl(k);
+      if (el) {
+        // Cannibalistic: eliminated candidate is also a truth key — split blue/red diagonally
+        const isCannibalistic = baseKeySet.has(k);
+        el.style.background  = isCannibalistic
+          ? 'linear-gradient(135deg, ' + TRUTH_COLOR + ' 50%, #ff0000 50%)'
+          : '#ff0000';
+        el.style.color       = '#fff';
+        el.style.fontWeight  = '700';
+        el.style.borderRadius= '2px';
+        el.style.width       = '14px';
+        el.style.height      = '14px';
+        el.style.justifySelf = 'center';
+        el.style.alignSelf   = 'center';
+        el.style.position    = 'relative';
+        el.style.zIndex      = '1';
+      }
+    }
+  }
+}
+
+function candEl(k) {
+  return document.querySelector(`.cell[data-idx="${keyCell(k)}"] .cand[data-val="${keyDigit(k)}"]`);
+}
+
+function candCenter(k) {
+  const el = candEl(k);
+  if (!el) return null;
+  const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return [r.left + r.width / 2 - wrap.left, r.top + r.height / 2 - wrap.top];
+}
+
+function cellCenter(cellIdx) {
+  const el = document.querySelector(`.cell[data-idx="${cellIdx}"]`);
+  if (!el) return null;
+  const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return [r.left + r.width / 2 - wrap.left, r.top + r.height / 2 - wrap.top];
+}
+
+// ── Truth SVG ──────────────────────────────────────────────────────────────
+
+function renderTruthSVG() {
+  const svg = document.getElementById('truth-svg');
+  svg.innerHTML = '';
+  const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
+  const gridR = document.getElementById('grid').getBoundingClientRect();
+
+  // Position of digit in a cell (works even if the digit isn't a current candidate)
+  function ghostCandCenter(cellIdx, digit) {
+    const cellEl = document.querySelector(`.cell[data-idx="${cellIdx}"]`);
+    if (!cellEl) return null;
+    const r = cellEl.getBoundingClientRect();
+    const col = (digit - 1) % 3, row = Math.floor((digit - 1) / 3);
+    const pad = 3, colW = (r.width - pad * 2) / 3, rowH = (r.height - pad * 2) / 3;
+    return [
+      r.left - wrap.left + pad + col * colW + colW / 2,
+      r.top  - wrap.top  + pad + row * rowH + rowH / 2
+    ];
+  }
+
+  // Draw one straight line segment; gapStart/gapEnd control the badge-clearance gap
+  function drawSeg(x1, y1, x2, y2, color, gapStart = true, gapEnd = true) {
+    const GAP = 8;
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    const needed = (gapStart ? GAP : 0) + (gapEnd ? GAP : 0);
+    if (len < needed + 1) return;
+    const seg = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    seg.setAttribute('x1', gapStart ? x1 + dx / len * GAP : x1);
+    seg.setAttribute('y1', gapStart ? y1 + dy / len * GAP : y1);
+    seg.setAttribute('x2', gapEnd   ? x2 - dx / len * GAP : x2);
+    seg.setAttribute('y2', gapEnd   ? y2 - dy / len * GAP : y2);
+    seg.setAttribute('stroke', color);
+    seg.setAttribute('stroke-width', '2.5');
+    seg.setAttribute('stroke-linecap', 'round');
+    seg.setAttribute('opacity', '0.65');
+    svg.appendChild(seg);
+  }
+
+  for (const truth of userTruths) {
+    const color = truth.color;
+
+    if (truth.isCellTruth) {
+      const el = document.querySelector(`.cell[data-idx="${keyCell(truth.fromKey)}"]`);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const INSET = 2;
+      const x1 = r.left   - wrap.left + INSET;
+      const y1 = r.top    - wrap.top  + INSET;
+      const x2 = r.right  - wrap.left - INSET;
+      const y2 = r.bottom - wrap.top  - INSET;
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', x1);
+      rect.setAttribute('y', y1);
+      rect.setAttribute('width',  x2 - x1);
+      rect.setAttribute('height', y2 - y1);
+      rect.setAttribute('rx', '4');
+      rect.setAttribute('fill', 'none');
+      rect.setAttribute('stroke', color);
+      rect.setAttribute('stroke-width', '2.5');
+      rect.setAttribute('opacity', '0.65');
+      svg.appendChild(rect);
+    } else {
+      const sortedKeys = [...truth.keys].sort((a, b) => keyCell(a) - keyCell(b));
+      if (sortedKeys.length < 2) continue;
+      const digit = keyDigit(sortedKeys[0]);
+
+      for (let i = 0; i < sortedKeys.length - 1; i++) {
+        const k1 = sortedKeys[i], k2 = sortedKeys[i + 1];
+        const c1 = keyCell(k1), c2 = keyCell(k2);
+        const row1 = Math.floor(c1 / 9), col1 = c1 % 9;
+        const row2 = Math.floor(c2 / 9), col2 = c2 % 9;
+
+        const p1 = candCenter(k1) || ghostCandCenter(c1, digit);
+        const p2 = candCenter(k2) || ghostCandCenter(c2, digit);
+        if (!p1 || !p2) continue;
+
+        if (row1 !== row2 && col1 !== col2) {
+          // Diagonal segment: route L-shaped. The corner is at the intersection of
+          // the bottom endpoint's x and the top endpoint's y — pixel-perfect because
+          // the same digit always sits at the same sub-position within any cell.
+          const [topKey, botKey] = row1 <= row2 ? [k1, k2] : [k2, k1];
+          const topPt = candCenter(topKey) || ghostCandCenter(keyCell(topKey), digit);
+          const botPt = candCenter(botKey) || ghostCandCenter(keyCell(botKey), digit);
+          if (topPt && botPt) {
+            const cornerPt = [botPt[0], topPt[1]];
+            drawSeg(botPt[0], botPt[1], cornerPt[0], cornerPt[1], color, true, false);
+            drawSeg(cornerPt[0], cornerPt[1], topPt[0], topPt[1], color, false, true);
+            continue;
+          }
+        }
+        // Straight segment (same row or same col, or corner fallback)
+        drawSeg(p1[0], p1[1], p2[0], p2[1], color);
+      }
+    }
+  }
+}
+
+function clearDragLine() {
+  document.getElementById('drag-svg').innerHTML = '';
+}
+
+function updateDragLine(toClientX, toClientY) {
+  const svg = document.getElementById('drag-svg');
+  svg.innerHTML = '';
+  if (!drawState) return;
+
+  const p1 = candCenter(drawState.fromKey);
+  if (!p1) return;
+
+  const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
+  const x2 = toClientX - wrap.left;
+  const y2 = toClientY - wrap.top;
+
+  const nextColor = TRUTH_COLORS[userTruths.length % TRUTH_COLORS.length];
+
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', p1[0]); line.setAttribute('y1', p1[1]);
+  line.setAttribute('x2', x2);    line.setAttribute('y2', y2);
+  line.setAttribute('stroke', nextColor);
+  line.setAttribute('stroke-width', '2');
+  line.setAttribute('stroke-dasharray', '5,3');
+  line.setAttribute('stroke-linecap', 'round');
+  line.setAttribute('opacity', '0.75');
+  svg.appendChild(line);
+}
+
+// ── Truth panel ────────────────────────────────────────────────────────────
+
+function renderTruthPanel() {
+  const panel = document.getElementById('truth-list');
+  panel.innerHTML = '';
+
+  if (!userTruths.length) {
+    panel.innerHTML = '<div class="no-truths">No truths drawn yet.<br>Switch to Draw mode, then drag between candidates.</div>';
+    return;
+  }
+
+  userTruths.forEach((truth, i) => {
+    const item = document.createElement('div');
+    item.className = 'truth-item';
+    item.innerHTML =
+      `<span class="truth-swatch" style="background:${truth.color}"></span>` +
+      `<span class="truth-label">${truth.label}</span>` +
+      `<button class="truth-del" title="Remove" onclick="removeTruth(${i})">×</button>`;
+    panel.appendChild(item);
+  });
+}
+
+// ── Status ─────────────────────────────────────────────────────────────────
+
+function setStatus(msg, type = '') {
+  const el = document.getElementById('status');
+  el.className = type;
+  el.innerHTML = '';
+  if (msg) el.appendChild(document.createTextNode(msg));
+}
+
+function setChecking() {
+  const el = document.getElementById('status');
+  el.className = 'info';
+  el.innerHTML = '<span class="spinner"></span>Checking…';
+  document.querySelectorAll('.check-btn').forEach(b => b.disabled = true);
+}
+
+function clearChecking() {
+  document.querySelectorAll('.check-btn').forEach(b => b.disabled = false);
+}
+
+// ── Drag event handlers ─────────────────────────────────────────────────────
+
+function setupDragHandlers() {
+  const gridEl = document.getElementById('grid');
+
+  // Mousedown: start drag (draw mode) or delete candidate / select cell (edit mode)
+  gridEl.addEventListener('mousedown', e => {
+    const candSpan = e.target.closest('.cand.present');
+    const cellDiv  = e.target.closest('.cell');
+    if (!cellDiv) return;
+    const i = +cellDiv.dataset.idx;
+
+    if (userMode === 'draw') {
+      e.preventDefault();
+      if (candSpan) {
+        // Start drawing from this candidate
+        const k = candKey(i, +candSpan.dataset.val);
+        drawState = { fromKey: k };
+      } else {
+        // Click on cell body → cell truth
+        const truth = cellTruthFromClick(i);
+        if (truth) registerTruth(truth);
+        else setStatus('Cell has fewer than 2 candidates — cannot create cell truth.', 'err');
+      }
+      return;
+    }
+
+    // Edit mode
+    if (candSpan) {
+      // Delete candidate
+      e.preventDefault();
+      const v = +candSpan.dataset.val;
+      if (solution && solution[i] === v) {
+        setStatus(`Can't remove ${v} from ${cellName(i)} — that's the solution digit for this cell.`, 'err');
+        return;
+      }
+      const k = candKey(i, v);
+      // Remove any truths that included this candidate
+      const before = userTruths.length;
+      userTruths = userTruths.filter(t => !t.keySet.has(k));
+      if (userTruths.length !== before) {
+        userTruths.forEach((t, idx) => { t.color = TRUTH_COLORS[idx % TRUTH_COLORS.length]; });
+        lastCheck = null;
+        clearCheckResult();
+        setStatus('Candidate deleted — affected truths removed.', 'info');
+      }
+      cands[i].delete(v);
+      buildGrid();
+      applyAllHighlights();
+      renderTruthSVG();
+      renderTruthPanel();
+    } else {
+      // Select cell for keyboard digit entry
+      selIdx = i;
+      document.querySelectorAll('.cell.sel').forEach(el => el.classList.remove('sel'));
+      cellDiv.classList.add('sel');
+    }
+  });
+
+  // Mousemove: update drag line
+  document.addEventListener('mousemove', e => {
+    if (!drawState) return;
+    updateDragLine(e.clientX, e.clientY);
+  });
+
+  // Mouseup: complete drag
+  document.addEventListener('mouseup', e => {
+    if (!drawState) return;
+    const fromKey = drawState.fromKey;
+    drawState = null;
+    clearDragLine();
+
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    const candSpan = target && target.closest('.cand.present');
+    const cellDiv  = target && target.closest('.cell');
+    if (!candSpan || !cellDiv) return;
+
+    const toKey = candKey(+cellDiv.dataset.idx, +candSpan.dataset.val);
+    const truth = truthFromDrag(fromKey, toKey);
+    if (!truth) {
+      setStatus('Invalid drag — candidates must share a unit (same digit) or be in the same cell.', 'err');
+      return;
+    }
+    registerTruth(truth);
+  });
+
+  // Keyboard: place digit in selected cell (edit mode)
+  document.addEventListener('keydown', e => {
+    if (selIdx < 0 || userMode !== 'edit') return;
+    const d = parseInt(e.key);
+    if (!d || d < 1 || d > 9) return;
+    if (given[selIdx]) return; // already filled
+
+    // Check for conflicts
+    const conflict = CELL_UNITS[selIdx].some(u =>
+      UNIT_CELLS[u].some(j => given[j] === d));
+    if (conflict) {
+      setStatus(`Conflict: ${d} already placed in a shared unit.`, 'err');
+      return;
+    }
+
+    placeDigit(selIdx, d);
+    // Remove any truth whose keys are no longer fully live (covers placed cell's
+    // other candidates, peer digit-candidates, etc.)
+    const before = userTruths.length;
+    userTruths = userTruths.filter(t => t.keys.every(k => cands[keyCell(k)].has(keyDigit(k))));
+    if (userTruths.length !== before) {
+      userTruths.forEach((t, idx) => { t.color = TRUTH_COLORS[idx % TRUTH_COLORS.length]; });
+      lastCheck = null;
+      clearCheckResult();
+    }
+    const placedAt = cellName(selIdx);
+    selIdx = -1;
+    buildGrid();
+    applyAllHighlights();
+    renderTruthSVG();
+    renderTruthPanel();
+    setStatus(`Placed ${d} at ${placedAt}.`, 'info');
+  });
+}
+
+// ── Entry ──────────────────────────────────────────────────────────────────
+
+// Returns a unique solution array (81 digits) or null if none/ambiguous.
+function solvePuzzle(givens) {
+  const board = [...givens];
+  let solutions = 0;
+  let result = null;
+
+  function canPlace(pos, d) {
+    const r = Math.floor(pos / 9), c = pos % 9, b = Math.floor(r / 3) * 3 + Math.floor(c / 3);
+    for (let i = 0; i < 9; i++) {
+      if (board[r * 9 + i] === d) return false;
+      if (board[i * 9 + c] === d) return false;
+      if (board[(Math.floor(b / 3) * 3 + Math.floor(i / 3)) * 9 + (b % 3) * 3 + i % 3] === d) return false;
+    }
+    return true;
+  }
+
+  function solve() {
+    if (solutions > 1) return;
+    let pos = -1;
+    for (let i = 0; i < 81; i++) { if (!board[i]) { pos = i; break; } }
+    if (pos === -1) { if (++solutions === 1) result = [...board]; return; }
+    for (let d = 1; d <= 9; d++) {
+      if (canPlace(pos, d)) { board[pos] = d; solve(); board[pos] = 0; }
+    }
+  }
+
+  solve();
+  return solutions === 1 ? result : null;
+}
+
+function loadPuzzle() {
+  const s = document.getElementById('puzzle-input').value.trim().replace(/\./g, '0');
+  if (!/^[0-9]{81}$/.test(s)) {
+    alert('Enter exactly 81 digits (0 for empty cells).');
+    return;
+  }
+  given      = Array.from(s, c => +c);
+  solution   = solvePuzzle(given);
+  solvedCells = new Set();
+  userTruths  = [];
+  lastCheck   = null;
+  selIdx      = -1;
+  initCandidates();
+  buildGrid();
+  renderTruthSVG();
+  renderTruthPanel();
+  clearCheckResult();
+  history.replaceState(null, '', '#' + s);
+  setStatus('Puzzle loaded. Use Edit mode to delete candidates or fill cells, Draw mode to mark truths.', 'info');
+}
+
+window.addEventListener('load', () => {
+  setupDragHandlers();
+  const hash = location.hash.slice(1);
+  if (/^[0-9.]{81}$/.test(hash)) {
+    document.getElementById('puzzle-input').value = hash;
+  }
+  loadPuzzle();
+});
+</script>
+</body>
+</html>
