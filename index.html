@@ -72,6 +72,24 @@ button:disabled { background: #cfd8dc; color: #90a4ae; cursor: default; }
 .check-btn { background: #2e7d32; }
 .check-btn:hover { background: #388e3c; }
 
+/* ── Highlight palette ── */
+#palette { display: none; align-items: center; gap: 6px; }
+body.highlight-mode #palette { display: flex; }
+.swatch {
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  border: 1px solid #b0bec5;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
+}
+.swatch:hover { border-color: #546e7a; }
+.swatch.active { border: 2px solid #263238; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #263238; }
+.swatch.eraser {
+  background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: #90a4ae; line-height: 1;
+}
+
 /* ── Main layout ── */
 #main { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 
@@ -140,6 +158,9 @@ body.edit-mode .cand.present:hover { background: rgba(220,80,80,0.12); color: #c
 body.draw-mode .cand.present { cursor: crosshair; }
 body.draw-mode .cand.present:hover { background: rgba(84,110,122,0.15); color: #37474f; }
 body.draw-mode .cell { cursor: crosshair; }
+
+/* In highlight mode, cells show a paint cursor */
+body.highlight-mode .cell { cursor: pointer; }
 
 /* SVG overlays */
 #truth-svg, #drag-svg {
@@ -260,6 +281,8 @@ body.draw-mode .cell { cursor: crosshair; }
   <span class="sep">|</span>
   <button id="btn-edit" class="mode-btn active" onclick="setMode('edit')">Edit</button>
   <button id="btn-draw" class="mode-btn" onclick="setMode('draw')">Draw Truths</button>
+  <button id="btn-highlight" class="mode-btn" onclick="setMode('highlight')">Highlight</button>
+  <span id="palette"></span>
   <span class="sep">|</span>
   <button class="check-btn" onclick="checkMove()">Check Move</button>
   <button onclick="clearTruths()" style="background:#bf360c">Clear Truths</button>
@@ -294,11 +317,17 @@ let given      = new Array(81).fill(0);
 let cands      = Array.from({length: 81}, () => new Set());
 let solvedCells = new Set();
 let selIdx     = -1;
-let userMode   = 'edit'; // 'edit' | 'draw'
+let userMode   = 'edit'; // 'edit' | 'draw' | 'highlight'
 let userTruths = [];     // [{keys, keySet, label, color, fromKey, toKey, isCellTruth}]
 let drawState  = null;   // {fromKey} while drag is in progress
 let lastCheck  = null;   // last checkMove result
 let solution   = null;   // null if puzzle has no unique solution, else 81-digit array
+
+// Purely cosmetic per-cell background colours. Read only by rendering — never by
+// any solve/check logic. null = no highlight.
+let cellColors = new Array(81).fill(null);
+let paintColor = '#fff59d';   // active highlight colour (null = eraser)
+let paintOp    = null;        // 'paint' | 'erase' for the current drag stroke, else null
 
 const TRUTH_COLOR = '#1a7fff';
 
@@ -498,12 +527,59 @@ function setMode(m) {
   clearDragLine();
   document.getElementById('btn-edit').classList.toggle('active', m === 'edit');
   document.getElementById('btn-draw').classList.toggle('active', m === 'draw');
-  document.body.className = m === 'edit' ? 'edit-mode' : 'draw-mode';
+  document.getElementById('btn-highlight').classList.toggle('active', m === 'highlight');
+  document.body.className = m + '-mode';
   // Deselect cell when switching away from edit
   if (m !== 'edit') {
     selIdx = -1;
     document.querySelectorAll('.cell.sel').forEach(el => el.classList.remove('sel'));
   }
+}
+
+// ── Cell highlight (cosmetic) ────────────────────────────────────────────────
+
+const HIGHLIGHT_COLORS = ['#fffbc8','#c8e6c9','#bbdefb','#f8bbd0','#ffe0b2','#e1bee7','#ffcdd2'];
+
+function buildPalette() {
+  const pal = document.getElementById('palette');
+  pal.innerHTML = '';
+  for (const color of HIGHLIGHT_COLORS) {
+    const sw = document.createElement('span');
+    sw.className = 'swatch' + (color === paintColor ? ' active' : '');
+    sw.style.background = color;
+    sw.title = 'Highlight ' + color;
+    sw.onclick = () => setPaintColor(color);
+    pal.appendChild(sw);
+  }
+  // Eraser
+  const er = document.createElement('span');
+  er.className = 'swatch eraser' + (paintColor === null ? ' active' : '');
+  er.textContent = '⌫';
+  er.title = 'Erase highlight';
+  er.onclick = () => setPaintColor(null);
+  pal.appendChild(er);
+  // Clear all
+  const clr = document.createElement('button');
+  clr.textContent = 'Clear';
+  clr.style.cssText = 'padding:4px 9px;font-size:11px;background:#78909c';
+  clr.onclick = clearHighlights;
+  pal.appendChild(clr);
+}
+
+function setPaintColor(color) {
+  paintColor = color;
+  buildPalette();
+}
+
+// Set a single cell's cosmetic colour and update just that node (no full rebuild).
+function paintCell(i, color) {
+  cellColors[i] = color;
+  if (cellEls[i]) cellEls[i].style.background = color || '';
+}
+
+function clearHighlights() {
+  cellColors.fill(null);
+  buildGrid();
 }
 
 // ── Truth management ───────────────────────────────────────────────────────
@@ -1193,6 +1269,9 @@ function buildGrid() {
   for (let i = 0; i < 81; i++) {
     const cell = cellEls[i];
     cell.classList.toggle('sel', i === selIdx);
+    // Cosmetic highlight sits on the cell background — below digits, candidates
+    // and the truth-line SVG overlay. Empty string falls back to the CSS default.
+    cell.style.background = cellColors[i] || '';
 
     if (given[i]) {
       cell.classList.toggle('solved', solvedCells.has(i));
@@ -1502,6 +1581,15 @@ function setupDragHandlers() {
     if (!cellDiv) return;
     const i = +cellDiv.dataset.idx;
 
+    if (userMode === 'highlight') {
+      e.preventDefault();
+      // First cell sets the stroke op: clicking a cell already showing the active
+      // colour erases it (toggle); otherwise paint. The eraser always erases.
+      paintOp = (paintColor === null || cellColors[i] === paintColor) ? 'erase' : 'paint';
+      paintCell(i, paintOp === 'erase' ? null : paintColor);
+      return;
+    }
+
     if (userMode === 'draw') {
       e.preventDefault();
       if (candSpan) {
@@ -1549,11 +1637,18 @@ function setupDragHandlers() {
     }
   });
 
-  // Mousemove: update drag line
+  // Mousemove: update drag line, or drag-paint highlights
   document.addEventListener('mousemove', e => {
-    if (!drawState) return;
-    updateDragLine(e.clientX, e.clientY);
+    if (drawState) { updateDragLine(e.clientX, e.clientY); return; }
+    if (paintOp) {
+      const cell = document.elementFromPoint(e.clientX, e.clientY);
+      const cellDiv = cell && cell.closest('.cell');
+      if (cellDiv) paintCell(+cellDiv.dataset.idx, paintOp === 'erase' ? null : paintColor);
+    }
   });
+
+  // Stop the paint stroke on release (anywhere)
+  document.addEventListener('mouseup', () => { paintOp = null; });
 
   // Mouseup: complete drag
   document.addEventListener('mouseup', e => {
@@ -1655,6 +1750,7 @@ function loadPuzzle() {
   userTruths  = [];
   lastCheck   = null;
   selIdx      = -1;
+  cellColors.fill(null); // loading a new puzzle clears cosmetic highlights
   initCandidates();
   buildGrid();
   renderTruthSVG();
@@ -1666,6 +1762,7 @@ function loadPuzzle() {
 
 window.addEventListener('load', () => {
   setupDragHandlers();
+  buildPalette();
   const hash = location.hash.slice(1);
   if (/^[0-9.]{81}$/.test(hash)) {
     document.getElementById('puzzle-input').value = hash;
