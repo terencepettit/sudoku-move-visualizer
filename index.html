@@ -151,7 +151,7 @@ body.highlight-mode #highlight-panel { display: block; }
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: repeat(3, 1fr);
   width: 100%; height: 100%;
-  padding: 4px;
+  padding: 7px;
 }
 
 .cand {
@@ -1363,10 +1363,14 @@ function buildGridStructure() {
       const span = document.createElement('span');
       span.className = 'cand';
       span.dataset.val = v;
-      // Nudge each candidate so all 9 have unique x AND unique y positions,
-      // preventing truth lines from overlapping regardless of direction.
-      // This offset is static per position, so it's set once here.
-      const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = 4;
+      // Nudge each candidate so all 9 get unique, EVENLY-spaced x and y positions
+      // (so row/column truth lines are equally spaced, not clustered in threes).
+      // Even spacing requires the offset to be exactly 1/3 of the candidate
+      // grid-track spacing: track = (cell 70 − 2×7 padding)/3, so N = that/3 = 56/9.
+      // The 7px padding (vs a tighter value) pulls the outermost candidates far
+      // enough from the cell edge that their 18px highlight badges + border don't
+      // overflow the cell. N stays coupled to the padding to keep spacing even.
+      const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = (70 - 2 * 7) / 9;
       span.style.transform = `translate(${(ri - 1) * N}px, ${(1 - ci) * N}px)`;
       cg.appendChild(span);
       candEls[candKey(i, v)] = span;
@@ -1487,6 +1491,12 @@ function renderTruthSVG() {
   svg.innerHTML = '';
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
   const gridR = document.getElementById('grid').getBoundingClientRect();
+  // Coordinates below come from getBoundingClientRect(), which reports zoomed
+  // (visual) pixels when the responsive `zoom` media query is active, whereas the
+  // SVG's own user space is the unzoomed 648px box. Matching the viewBox to the
+  // current visual size makes 1 user unit == 1 visual px, so the double-scaling
+  // cancels and lines stay on the badges at any zoom (viewBox == box at zoom 1).
+  svg.setAttribute('viewBox', `0 0 ${wrap.width} ${wrap.height}`);
 
   // Position of digit in a cell (works even if the digit isn't a current candidate)
   function ghostCandCenter(cellIdx, digit) {
@@ -1525,7 +1535,7 @@ function renderTruthSVG() {
     poly.setAttribute('points', p.map(a => a[0] + ',' + a[1]).join(' '));
     poly.setAttribute('fill', 'none');
     poly.setAttribute('stroke', color);
-    poly.setAttribute('stroke-width', '2.5');
+    poly.setAttribute('stroke-width', '4.5');
     poly.setAttribute('stroke-linecap', 'butt');
     poly.setAttribute('stroke-linejoin', 'miter');
     lineTarget.appendChild(poly);
@@ -1551,7 +1561,7 @@ function renderTruthSVG() {
       rect.setAttribute('rx', '4');
       rect.setAttribute('fill', 'none');
       rect.setAttribute('stroke', color);
-      rect.setAttribute('stroke-width', '2.5');
+      rect.setAttribute('stroke-width', '4.5');
       rect.setAttribute('opacity', '0.65');
       svg.appendChild(rect);
     } else {
@@ -1608,6 +1618,9 @@ function updateDragLine(toClientX, toClientY) {
   if (!p1) return;
 
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
+  // Match viewBox to visual size so the drag line tracks correctly under zoom
+  // (see note in renderTruthSVG).
+  svg.setAttribute('viewBox', `0 0 ${wrap.width} ${wrap.height}`);
   const x2 = toClientX - wrap.left;
   const y2 = toClientY - wrap.top;
 
@@ -1883,7 +1896,10 @@ function loadPuzzle() {
   renderTruthSVG();
   renderTruthPanel();
   clearCheckResult();
-  history.replaceState(null, '', '#' + s);
+  // In a sandboxed/srcdoc preview the document origin can't own a hash URL, so
+  // replaceState throws a SecurityError. The hash is only a nice-to-have (shareable
+  // permalink), so ignore the failure rather than aborting the load.
+  try { history.replaceState(null, '', '#' + s); } catch (e) { /* sandboxed iframe */ }
   setStatus('Puzzle loaded.', 'info');
 }
 
