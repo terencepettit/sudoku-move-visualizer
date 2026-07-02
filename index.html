@@ -94,21 +94,23 @@ body.highlight-mode #palette { display: flex; }
 #main { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 
 /* ── Grid ── */
-/* Grid lines are real layout space, not an overlay: the 54px cell tracks are
+/* Grid lines are real layout space, not an overlay: the 70px cell tracks are
    separated by gap tracks (1px within a box, 3px between boxes) that show the
    container's line colour. This keeps every cell's interior identical regardless
    of whether it borders a thin or a thick line. */
 #grid-wrap {
   flex-shrink: 0;
   position: relative;
-  width: 504px;
-  height: 504px;
+  width: 648px;
+  height: 648px;
 }
 
+/* Cell tracks are 30% larger (54→70px); the gap/line tracks stay 1px/3px so the
+   grid lines remain crisp and the 1px badge border keeps its weight. */
 #grid {
   display: inline-grid;
-  grid-template-columns: 54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px;
-  grid-template-rows:    54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px;
+  grid-template-columns: 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
+  grid-template-rows:    70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
   background: #72787b;
   padding: 3px;
   position: absolute;
@@ -116,7 +118,7 @@ body.highlight-mode #palette { display: flex; }
 }
 
 .cell {
-  width: 54px; height: 54px;
+  width: 70px; height: 70px;
   background: #fafafa;
   display: flex; align-items: center; justify-content: center;
   position: relative;
@@ -125,20 +127,20 @@ body.highlight-mode #palette { display: flex; }
 }
 .cell.sel { background: #e3f2fd; }
 
-.cell.given  .digit { font-size: 28px; font-weight: 500; color: #181818; }
-.cell.solved .digit { font-size: 28px; font-weight: 500; color: #2e7d32; }
+.cell.given  .digit { font-size: 36px; font-weight: 500; color: #181818; }
+.cell.solved .digit { font-size: 36px; font-weight: 500; color: #2e7d32; }
 
 .candidates {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: repeat(3, 1fr);
   width: 100%; height: 100%;
-  padding: 3px;
+  padding: 4px;
 }
 
 .cand {
   display: flex; align-items: center; justify-content: center;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 500;
   color: transparent;
   line-height: 1;
@@ -1275,7 +1277,7 @@ const candGridEls = new Array(81);  // .candidates grid by cell index
 const candEls    = new Array(729);  // .cand span by candKey
 
 // Inline styles that applyAllHighlights sets and that a render must clear.
-const HL_PROPS = ['background','color','fontWeight','borderRadius','width','height',
+const HL_PROPS = ['background','color','fontWeight','border','borderRadius','width','height',
                   'justifySelf','alignSelf','position','zIndex','boxShadow'];
 
 function buildGridStructure() {
@@ -1307,7 +1309,7 @@ function buildGridStructure() {
       // Nudge each candidate so all 9 have unique x AND unique y positions,
       // preventing truth lines from overlapping regardless of direction.
       // This offset is static per position, so it's set once here.
-      const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = 3;
+      const ri = Math.floor((v - 1) / 3), ci = (v - 1) % 3, N = 4;
       span.style.transform = `translate(${(ri - 1) * N}px, ${(1 - ci) * N}px)`;
       cg.appendChild(span);
       candEls[candKey(i, v)] = span;
@@ -1364,9 +1366,10 @@ function applyAllHighlights() {
         el.style.background  = TRUTH_COLOR;
         el.style.color       = '#fff';
         el.style.fontWeight  = '700';
+        el.style.border      = '1px solid #000';
         el.style.borderRadius= '2px';
-        el.style.width       = '14px';
-        el.style.height      = '14px';
+        el.style.width       = '18px';
+        el.style.height      = '18px';
         el.style.justifySelf = 'center';
         el.style.alignSelf   = 'center';
         el.style.position    = 'relative';
@@ -1384,9 +1387,10 @@ function applyAllHighlights() {
         el.style.background  = '#ff0000';
         el.style.color       = '#fff';
         el.style.fontWeight  = '700';
+        el.style.border      = '1px solid #000';
         el.style.borderRadius= '2px';
-        el.style.width       = '14px';
-        el.style.height      = '14px';
+        el.style.width       = '18px';
+        el.style.height      = '18px';
         el.style.justifySelf = 'center';
         el.style.alignSelf   = 'center';
         el.style.position    = 'relative';
@@ -1448,9 +1452,9 @@ function renderTruthSVG() {
   // Draw a connector as a single polyline through the given points. Only the two
   // free ends (at digit badges) are trimmed back by GAP; interior corners are kept
   // exact and joined with a miter so the bend is filled cleanly (no cap notch).
-  // GAP is just under the badge half-width (14px badge → 7px) so lines meet the edge.
+  // GAP is just under the badge half-width (18px badge → 9px) so lines meet the edge.
   function drawPolyline(pts, color) {
-    const GAP = 6.5;
+    const GAP = 8.5;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
     const trim = (from, to) => {
