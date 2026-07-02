@@ -301,7 +301,7 @@ body.highlight-mode .cell { cursor: pointer; }
     </div>
     <div class="btn-row">
       <button class="check-btn" onclick="checkMove()" style="flex:1">Check Move</button>
-      <button onclick="removeLastTruth()" style="background:#3a2a1a">Undo Last</button>
+      <button id="btn-undo" onclick="undo()" style="background:#3a2a1a" disabled>Undo</button>
     </div>
     <div id="check-result"></div>
   </div>
@@ -325,6 +325,11 @@ let solution   = null;   // null if puzzle has no unique solution, else 81-digit
 let cellColors = new Array(81).fill(null);
 let paintColor = '#fff59d';   // active highlight colour (null = eraser)
 let paintOp    = null;        // 'paint' | 'erase' for the current drag stroke, else null
+
+// Undo history — snapshots of the full mutable state captured before each action.
+// Capped at UNDO_LIMIT; cleared (not undoable) when a new puzzle is loaded.
+const UNDO_LIMIT = 10;
+let undoStack = [];
 
 const TRUTH_COLOR = '#1a7fff';
 
@@ -435,6 +440,7 @@ function placeDigit(i, d) {
 }
 
 function skipBasics() {
+  pushUndo();
   let progress = true;
   while (progress) {
     progress = false;
@@ -575,11 +581,59 @@ function paintCell(i, color) {
 }
 
 function clearHighlights() {
+  pushUndo();
   cellColors.fill(null);
   // buildGrid() resets the candidate badge styling, so re-apply the truth /
   // elimination highlights afterward (this only clears cosmetic cell colours).
   buildGrid();
   applyAllHighlights();
+}
+
+// ── Undo ─────────────────────────────────────────────────────────────────────
+
+// Deep-copy the full mutable state. Truth objects are treated as immutable, so a
+// shallow copy of the array is enough; everything else is copied by value.
+function snapshotState() {
+  return {
+    given:       given.slice(),
+    cands:       cands.map(s => new Set(s)),
+    solvedCells: new Set(solvedCells),
+    userTruths:  userTruths.slice(),
+    cellColors:  cellColors.slice(),
+    lastCheck,
+    selIdx
+  };
+}
+
+// Record the current state so the action about to run can be undone.
+function pushUndo() {
+  undoStack.push(snapshotState());
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  updateUndoButton();
+}
+
+function undo() {
+  if (!undoStack.length) { setStatus('Nothing to undo.', 'err'); return; }
+  const s = undoStack.pop();
+  given       = s.given;
+  cands       = s.cands;
+  solvedCells = s.solvedCells;
+  userTruths  = s.userTruths;
+  cellColors  = s.cellColors;
+  lastCheck   = s.lastCheck;
+  selIdx      = s.selIdx;
+  buildGrid();
+  applyAllHighlights();
+  renderTruthSVG();
+  renderTruthPanel();
+  if (lastCheck) showCheckResult(lastCheck); else clearCheckResult();
+  updateUndoButton();
+  setStatus('Undone.', 'info');
+}
+
+function updateUndoButton() {
+  const btn = document.getElementById('btn-undo');
+  if (btn) btn.disabled = undoStack.length === 0;
 }
 
 // ── Truth management ───────────────────────────────────────────────────────
@@ -625,6 +679,7 @@ function registerTruth(truth) {
     setStatus('That truth is already established.', 'err');
     return false;
   }
+  pushUndo();
   truth.color = truthTypeColor(truth);
   userTruths.push(truth);
   lastCheck = null;
@@ -638,6 +693,7 @@ function registerTruth(truth) {
 }
 
 function removeTruth(idx) {
+  pushUndo();
   userTruths.splice(idx, 1);
   // Re-assign colors to keep them consistent
   userTruths.forEach(t => { t.color = truthTypeColor(t); });
@@ -650,11 +706,8 @@ function removeTruth(idx) {
   setStatus('Truth removed.', 'info');
 }
 
-function removeLastTruth() {
-  if (userTruths.length) removeTruth(userTruths.length - 1);
-}
-
 function clearTruths() {
+  pushUndo();
   userTruths = [];
   lastCheck = null;
   buildGrid();
@@ -1195,6 +1248,7 @@ function showCheckResult(result, numPC, numFound) {
 
 function applyEliminations() {
   if (!lastCheck) return;
+  pushUndo();
   for (const [cell, digit] of lastCheck.elims)
     cands[cell].delete(digit);
   lastCheck = null;
@@ -1565,6 +1619,8 @@ function setupDragHandlers() {
 
     if (userMode === 'highlight') {
       e.preventDefault();
+      // Snapshot once at the start so the whole paint stroke is a single undo.
+      pushUndo();
       // First cell sets the stroke op: clicking a cell already showing the active
       // colour erases it (toggle); otherwise paint. The eraser always erases.
       paintOp = (paintColor === null || cellColors[i] === paintColor) ? 'erase' : 'paint';
@@ -1596,6 +1652,7 @@ function setupDragHandlers() {
         setStatus(`Can't remove ${v} from ${cellName(i)} — that's the solution digit for this cell.`, 'err');
         return;
       }
+      pushUndo();
       const k = candKey(i, v);
       // Remove any truths that included this candidate
       const before = userTruths.length;
@@ -1675,6 +1732,7 @@ function setupDragHandlers() {
       return;
     }
 
+    pushUndo();
     placeDigit(selIdx, d);
     // Remove any truth whose keys are no longer fully live (covers placed cell's
     // other candidates, peer digit-candidates, etc.)
@@ -1740,6 +1798,8 @@ function loadPuzzle() {
   lastCheck   = null;
   selIdx      = -1;
   cellColors.fill(null); // loading a new puzzle clears cosmetic highlights
+  undoStack = [];        // a new puzzle is not undoable and resets history
+  updateUndoButton();
   initCandidates();
   buildGrid();
   renderTruthSVG();
