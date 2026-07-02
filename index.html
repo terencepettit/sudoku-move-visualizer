@@ -94,19 +94,25 @@ body.highlight-mode #palette { display: flex; }
 #main { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 
 /* ── Grid ── */
+/* Grid lines are real layout space, not an overlay: the 54px cell tracks are
+   separated by gap tracks (1px within a box, 3px between boxes) that show the
+   container's line colour. This keeps every cell's interior identical regardless
+   of whether it borders a thin or a thick line. */
 #grid-wrap {
   flex-shrink: 0;
   position: relative;
-  width: 492px;
-  height: 492px;
+  width: 504px;
+  height: 504px;
 }
 
 #grid {
   display: inline-grid;
-  grid-template-columns: repeat(9, 54px);
-  background: #fafafa;
+  grid-template-columns: 54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px;
+  grid-template-rows:    54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px 3px 54px 1px 54px 1px 54px;
+  background: #72787b;
+  padding: 3px;
   position: absolute;
-  left: 3px; top: 3px;
+  left: 0; top: 0;
 }
 
 .cell {
@@ -118,14 +124,6 @@ body.highlight-mode #palette { display: flex; }
   cursor: default;
 }
 .cell.sel { background: #e3f2fd; }
-
-#grid-lines-svg {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  pointer-events: none;
-  overflow: visible;
-}
 
 .cell.given  .digit { font-size: 28px; font-weight: 500; color: #181818; }
 .cell.solved .digit { font-size: 28px; font-weight: 500; color: #2e7d32; }
@@ -291,7 +289,6 @@ body.highlight-mode .cell { cursor: pointer; }
 <div id="main">
   <div id="grid-wrap">
     <div id="grid"></div>
-    <svg id="grid-lines-svg"></svg>
     <svg id="truth-svg"></svg>
     <svg id="drag-svg"></svg>
   </div>
@@ -1237,6 +1234,10 @@ function buildGridStructure() {
     cell.dataset.idx = i;
     cell.dataset.row = cellRow(i);
     cell.dataset.col = cellCol(i);
+    // Place into the explicit cell tracks (odd-numbered); even tracks are the
+    // gap tracks that render as grid lines. Avoids auto-placement into gaps.
+    cell.style.gridColumn = String(2 * cellCol(i) + 1);
+    cell.style.gridRow    = String(2 * cellRow(i) + 1);
 
     const digit = document.createElement('span');
     digit.className = 'digit';
@@ -1265,7 +1266,6 @@ function buildGridStructure() {
   }
 
   gridBuilt = true;
-  drawGridLines(); // grid lines never change — draw them once
 }
 
 // Update the existing grid to the current state without tearing down the DOM.
@@ -1298,45 +1298,6 @@ function buildGrid() {
         for (const p of HL_PROPS) span.style[p] = '';
       }
     }
-  }
-}
-
-function drawGridLines() {
-  const svg = document.getElementById('grid-lines-svg');
-  svg.innerHTML = '';
-  const NS = 'http://www.w3.org/2000/svg';
-  const COLOR = '#72787b';
-  const CELL = 54, BORDER = 3, INNER = 1, BOX = 3;
-  const OFF = BORDER; // cells start at 3px offset (outer border width)
-  const SIZE = 9 * CELL; // 486px
-
-  // Outer border rect (stroke centered on the rect edge)
-  const outer = document.createElementNS(NS, 'rect');
-  outer.setAttribute('x', BORDER / 2);
-  outer.setAttribute('y', BORDER / 2);
-  outer.setAttribute('width',  SIZE + BORDER);
-  outer.setAttribute('height', SIZE + BORDER);
-  outer.setAttribute('fill', 'none');
-  outer.setAttribute('stroke', COLOR);
-  outer.setAttribute('stroke-width', BORDER);
-  svg.appendChild(outer);
-
-  // Inner grid lines
-  for (let i = 1; i < 9; i++) {
-    const pos = OFF + i * CELL;
-    const w = (i % 3 === 0) ? BOX : INNER;
-    // Horizontal line at row boundary i
-    const hl = document.createElementNS(NS, 'line');
-    hl.setAttribute('x1', OFF); hl.setAttribute('y1', pos);
-    hl.setAttribute('x2', OFF + SIZE); hl.setAttribute('y2', pos);
-    hl.setAttribute('stroke', COLOR); hl.setAttribute('stroke-width', w);
-    svg.appendChild(hl);
-    // Vertical line at column boundary i
-    const vl = document.createElementNS(NS, 'line');
-    vl.setAttribute('x1', pos); vl.setAttribute('y1', OFF);
-    vl.setAttribute('x2', pos); vl.setAttribute('y2', OFF + SIZE);
-    vl.setAttribute('stroke', COLOR); vl.setAttribute('stroke-width', w);
-    svg.appendChild(vl);
   }
 }
 
