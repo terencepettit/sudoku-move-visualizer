@@ -117,18 +117,19 @@ body.highlight-mode #highlight-panel { display: block; }
 #grid-wrap {
   flex-shrink: 0;
   position: relative;
-  width: 648px;
-  height: 648px;
+  width: 652px;
+  height: 652px;
 }
 
-/* Cell tracks are 30% larger (54→70px); the gap/line tracks stay 1px/3px so the
-   grid lines remain crisp and the 1px badge border keeps its weight. */
+/* 70px cell tracks separated by grey gap tracks: 1px thin lines within a box and
+   4px box lines between boxes, both showing the #grid background. The 4px padding
+   forms the (matching) outer border. */
 #grid {
   display: inline-grid;
-  grid-template-columns: 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
-  grid-template-rows:    70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
+  grid-template-columns: 70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px;
+  grid-template-rows:    70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px;
   background: #72787b;
-  padding: 3px;
+  padding: 4px;
   position: absolute;
   left: 0; top: 0;
 }
@@ -144,7 +145,7 @@ body.highlight-mode #highlight-panel { display: block; }
 .cell.sel { background: #e3f2fd; }
 
 .cell.given  .digit { font-size: 46px; font-weight: 500; color: #181818; }
-.cell.solved .digit { font-size: 46px; font-weight: 500; color: #2e7d32; }
+.cell.solved .digit { font-size: 46px; font-weight: 500; color: #0d47a1; }
 
 .candidates {
   display: grid;
