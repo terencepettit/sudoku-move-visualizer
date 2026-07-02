@@ -1423,22 +1423,29 @@ function renderTruthSVG() {
   // stroke — the group's opacity is applied once, after its contents are flattened.
   let lineTarget = svg;
 
-  // Draw one straight line segment; gapStart/gapEnd control the badge-clearance gap
-  function drawSeg(x1, y1, x2, y2, color, gapStart = true, gapEnd = true) {
-    const GAP = 8;
-    const dx = x2 - x1, dy = y2 - y1;
-    const len = Math.hypot(dx, dy);
-    const needed = (gapStart ? GAP : 0) + (gapEnd ? GAP : 0);
-    if (len < needed + 1) return;
-    const seg = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    seg.setAttribute('x1', gapStart ? x1 + dx / len * GAP : x1);
-    seg.setAttribute('y1', gapStart ? y1 + dy / len * GAP : y1);
-    seg.setAttribute('x2', gapEnd   ? x2 - dx / len * GAP : x2);
-    seg.setAttribute('y2', gapEnd   ? y2 - dy / len * GAP : y2);
-    seg.setAttribute('stroke', color);
-    seg.setAttribute('stroke-width', '2.5');
-    seg.setAttribute('stroke-linecap', 'round');
-    lineTarget.appendChild(seg);
+  // Draw a connector as a single polyline through the given points. Only the two
+  // free ends (at digit badges) are trimmed back by GAP; interior corners are kept
+  // exact and joined with a miter so the bend is filled cleanly (no cap notch).
+  // GAP is just under the badge half-width (14px badge → 7px) so lines meet the edge.
+  function drawPolyline(pts, color) {
+    const GAP = 6.5;
+    const p = pts.map(a => [a[0], a[1]]);
+    const n = p.length;
+    const trim = (from, to) => {
+      const dx = p[to][0] - p[from][0], dy = p[to][1] - p[from][1];
+      const len = Math.hypot(dx, dy);
+      if (len > GAP) { p[from][0] += dx / len * GAP; p[from][1] += dy / len * GAP; }
+    };
+    trim(0, 1);          // start end → toward next point
+    trim(n - 1, n - 2);  // finish end → toward previous point
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', p.map(a => a[0] + ',' + a[1]).join(' '));
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', color);
+    poly.setAttribute('stroke-width', '2.5');
+    poly.setAttribute('stroke-linecap', 'butt');
+    poly.setAttribute('stroke-linejoin', 'miter');
+    lineTarget.appendChild(poly);
   }
 
   for (const truth of userTruths) {
@@ -1494,13 +1501,12 @@ function renderTruthSVG() {
           const botPt = candCenter(botKey) || ghostCandCenter(keyCell(botKey), digit);
           if (topPt && botPt) {
             const cornerPt = [botPt[0], topPt[1]];
-            drawSeg(botPt[0], botPt[1], cornerPt[0], cornerPt[1], color, true, false);
-            drawSeg(cornerPt[0], cornerPt[1], topPt[0], topPt[1], color, false, true);
+            drawPolyline([botPt, cornerPt, topPt], color);
             continue;
           }
         }
         // Straight segment (same row or same col, or corner fallback)
-        drawSeg(p1[0], p1[1], p2[0], p2[1], color);
+        drawPolyline([p1, p2], color);
       }
     }
   }
