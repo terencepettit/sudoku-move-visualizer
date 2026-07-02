@@ -1222,7 +1222,7 @@ const candEls    = new Array(729);  // .cand span by candKey
 
 // Inline styles that applyAllHighlights sets and that a render must clear.
 const HL_PROPS = ['background','color','fontWeight','borderRadius','width','height',
-                  'justifySelf','alignSelf','position','zIndex'];
+                  'justifySelf','alignSelf','position','zIndex','boxShadow'];
 
 function buildGridStructure() {
   const gridEl = document.getElementById('grid');
@@ -1322,6 +1322,7 @@ function applyAllHighlights() {
   }
   // Apply check eliminations (override truth color if needed)
   if (lastCheck) {
+    const baseKeySet = new Set(userTruths.flatMap(t => t.keys));
     for (const [c, d] of lastCheck.elims) {
       const k = candKey(c, d);
       const el = candEl(k);
@@ -1336,6 +1337,9 @@ function applyAllHighlights() {
         el.style.alignSelf   = 'center';
         el.style.position    = 'relative';
         el.style.zIndex      = '1';
+        // Cannibalistic: eliminated candidate was also a truth key. Keep the red
+        // fill (status = eliminated) and add a blue ring (provenance = truth).
+        el.style.boxShadow   = baseKeySet.has(k) ? `0 0 0 2px ${TRUTH_COLOR}` : '';
       }
     }
   }
