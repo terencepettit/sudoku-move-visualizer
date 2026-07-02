@@ -1201,8 +1201,11 @@ function applyEliminations() {
   for (const [cell, digit] of lastCheck.elims)
     cands[cell].delete(digit);
   lastCheck = null;
+  userTruths = [];   // clear the highlighted truths along with their eliminations
   buildGrid();
   applyAllHighlights();
+  renderTruthSVG();
+  renderTruthPanel();
   clearCheckResult();
 }
 
