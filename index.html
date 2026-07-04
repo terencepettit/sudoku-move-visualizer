@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Sudoku Visualizer</title>
+<title>Sudoku Move Visualizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
@@ -84,6 +84,10 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .btn-danger { background: #c62828; }
 .btn-danger:hover { background: #b71c1c; }
 
+/* Digit-opacity slider */
+#digit-opacity-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #546e7a; white-space: nowrap; }
+#digit-opacity { width: 90px; cursor: pointer; accent-color: #546e7a; }
+
 .btn-secondary { background: #eceff1; color: #546e7a; border: 1px solid #b0bec5; }
 .btn-secondary:hover { background: #cfd8dc; color: #37474f; border-color: #78909c; }
 
@@ -144,8 +148,8 @@ body.highlight-mode #highlight-panel { display: block; }
 }
 .cell.sel { background: #e3f2fd; }
 
-.cell.given  .digit { font-size: 46px; font-weight: 500; color: #181818; }
-.cell.solved .digit { font-size: 46px; font-weight: 500; color: #0d47a1; }
+.cell.given  .digit { font-size: 46px; font-weight: 500; color: #181818; opacity: var(--digit-opacity, 1); }
+.cell.solved .digit { font-size: 46px; font-weight: 500; color: #0d47a1; opacity: var(--digit-opacity, 1); }
 
 .candidates {
   display: grid;
@@ -249,6 +253,8 @@ body.highlight-mode .cell { cursor: pointer; }
 }
 
 #truth-list { margin-bottom: 16px; }
+#link-panel { display: none; }        /* shown by renderTruthPanel when links exist */
+#link-list { margin-bottom: 16px; }
 
 .truth-item {
   display: flex;
@@ -265,6 +271,14 @@ body.highlight-mode .cell { cursor: pointer; }
   width: 10px; height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+/* Link swatch: hollow ring (dashed line vocabulary) to distinguish from truths */
+.link-swatch {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #fff;
+  box-sizing: border-box;
 }
 .truth-label { flex: 1; color: #37474f; }
 .truth-del {
@@ -328,11 +342,18 @@ body.highlight-mode .cell { cursor: pointer; }
     value="000000094760910050090002081070050010000709000080030067240100070010090045900000100">
   <button onclick="loadPuzzle()">Load</button>
   <button onclick="skipBasics()"
-    title="Auto-apply the basic techniques (naked/hidden singles, locked candidates, naked/hidden subsets)">Skip Basics</button>
+    title="Auto-apply the basic techniques (naked/hidden singles, locked candidates, naked/hidden subsets)">Auto-fill Basics</button>
   <span class="sep">|</span>
   <button id="btn-edit" class="mode-btn active" onclick="setMode('edit')">Edit</button>
   <button id="btn-draw" class="mode-btn" onclick="setMode('draw')">Draw Truths</button>
   <button id="btn-highlight" class="mode-btn" onclick="setMode('highlight')">Highlight</button>
+  <span class="sep">|</span>
+  <button id="btn-links" class="mode-btn active" onclick="toggleLinks()"
+    title="Show or hide the covering links on the grid">Links</button>
+  <label id="digit-opacity-label" title="Opacity of the big given/solved digits">Digits
+    <input id="digit-opacity" type="range" min="0" max="100" value="100"
+      oninput="setDigitOpacity(this.value)">
+  </label>
   <span class="sep">|</span>
   <button id="btn-undo" class="btn-secondary" onclick="undo()" disabled>↶ Undo</button>
 </div>
@@ -353,11 +374,15 @@ body.highlight-mode .cell { cursor: pointer; }
     </div>
     <div class="panel-title">Truths</div>
     <div id="truth-list">
-      <div class="no-truths">No truths drawn yet.<br>Switch to Draw mode, then drag between candidates of the same digit in the same unit, or click a cell to mark it as a cell truth.</div>
+      <div class="no-truths">No truths drawn yet.<br>Switch to Draw Truths mode, then drag between candidates of the same digit in the same unit, or click a cell to mark it as a cell truth.</div>
+    </div>
+    <div id="link-panel">
+      <div class="panel-title">Links</div>
+      <div id="link-list"></div>
     </div>
     <div class="btn-row">
       <button class="check-btn" onclick="checkMove()" style="flex:1">Check Move</button>
-      <button class="btn-danger" onclick="clearTruths()">Clear Truths</button>
+      <button class="btn-danger" onclick="clearAll()">Clear All</button>
     </div>
     <div id="check-result"></div>
   </div>
@@ -377,6 +402,7 @@ let userTruths = [];     // [{keys, keySet, label, color, fromKey, toKey, isCell
 let drawState  = null;   // {fromKey} while drag is in progress
 let lastCheck  = null;   // last checkMove result
 let solution   = null;   // null if puzzle has no unique solution, else 81-digit array
+let showLinks  = true;   // display toggle for the auto-generated cover links
 
 // Purely cosmetic per-cell background colours. Read only by rendering — never by
 // any solve/check logic. null = no highlight.
@@ -733,6 +759,16 @@ function cellTruthFromClick(cellIdx) {
            fromKey: keys[0], toKey: keys[keys.length - 1] };
 }
 
+// Shared re-render after any truth/link mutation.
+function refreshSets() {
+  lastCheck = null;
+  buildGrid();
+  applyAllHighlights();
+  renderTruthSVG();
+  renderTruthPanel();
+  clearCheckResult();
+}
+
 function registerTruth(truth) {
   if (!truth) return false;
   if (userTruths.some(t => t.sig === truth.sig)) {
@@ -742,39 +778,22 @@ function registerTruth(truth) {
   pushUndo();
   truth.color = truthTypeColor(truth);
   userTruths.push(truth);
-  lastCheck = null;
-  buildGrid();
-  applyAllHighlights();
-  renderTruthSVG();
-  renderTruthPanel();
-  clearCheckResult();
-  setStatus(`Added: ${truth.label}`, 'info');
+  refreshSets();
+  setStatus(`Added truth: ${truth.label}`, 'info');
   return true;
 }
 
 function removeTruth(idx) {
   pushUndo();
   userTruths.splice(idx, 1);
-  // Re-assign colors to keep them consistent
-  userTruths.forEach(t => { t.color = truthTypeColor(t); });
-  lastCheck = null;
-  buildGrid();
-  applyAllHighlights();
-  renderTruthSVG();
-  renderTruthPanel();
-  clearCheckResult();
+  refreshSets();
   setStatus('Truth removed.', 'info');
 }
 
-function clearTruths() {
+function clearAll() {
   pushUndo();
   userTruths = [];
-  lastCheck = null;
-  buildGrid();
-  applyAllHighlights();
-  renderTruthSVG();
-  renderTruthPanel();
-  clearCheckResult();
+  refreshSets();
   setStatus('Truths cleared.', 'info');
 }
 
@@ -783,7 +802,7 @@ function clearTruths() {
 function checkMove() {
   clearCheckResult();
   if (!userTruths.length) {
-    setStatus('No truths defined — add truths in Draw mode first.', 'err');
+    setStatus('No truths defined — add at least one truth first.', 'err');
     return;
   }
   setChecking();
@@ -795,7 +814,6 @@ function _checkMoveWork() {
 }
 
 function _checkMoveImpl() {
-
   const n = userTruths.length;
   const baseKeyArr = userTruths.flatMap(t => t.keys);
   const baseKeySet = new Set(baseKeyArr);
@@ -877,7 +895,7 @@ function _checkMoveImpl() {
     seenSigs.add(sig);
 
     const m = chosen.length;
-    if (!byM.has(m)) byM.set(m, { count: 0, keyCounts: new Map(), exampleCovers: null });
+    if (!byM.has(m)) byM.set(m, { count: 0, keyCounts: new Map(), exampleCovers: null, coverUnion: new Set() });
     const entry = byM.get(m);
 
     // Rank-0 requires pigeonhole bijection: each cover must map to exactly one truth.
@@ -888,6 +906,10 @@ function _checkMoveImpl() {
     if (m === n && (hasOverlappingTruthKeys || !hasPerfectCoverTruthMatching(chosen, userTruths))) return;
 
     entry.count++;
+    // Accumulate every cover that appears in any valid covering, so the display can
+    // show ALL participating links (e.g. a naked pair's row AND box covers), not just
+    // one example — every elimination is then backed by a visible link.
+    for (const c of chosen) entry.coverUnion.add(c);
     if (m === n && rank0FoundAtNode < 0) rank0FoundAtNode = nodes;
     const assignElims = new Set();
     for (const c of chosen)
@@ -955,7 +977,7 @@ function _checkMoveImpl() {
     rank0Elims = [...keyCounts.entries()]
       .filter(([, c]) => c === count)
       .map(([k]) => [keyCell(k), keyDigit(k)]);
-    rank0Meta = { covers: exampleCovers, count };
+    rank0Meta = { covers: [...rank0.coverUnion], count };
   }
 
   // Always run contradiction + assignment checks to catch forcing-chain eliminations
@@ -970,23 +992,54 @@ function _checkMoveImpl() {
   for (const [c,d] of assignElims) elimSet.add(candKey(c,d));
   const allElims = [...elimSet].map(k => [keyCell(k), keyDigit(k)]);
 
+  // Also show EVERY cover that links a truth candidate to an eliminated one (not just
+  // the ones in the chosen minimal covering). Since every potCover already contains a
+  // truth candidate, a cover that also contains an eliminated candidate directly links
+  // truth → elimination, so we surface it as an alternative explanation.
+  const linkingCovers = potCovers.filter(c => c.keys.some(k => elimSet.has(k)));
+
+  // Build the link list for display: the given covering plus all truth→elim covers,
+  // keeping only those that touch ≥2 relevant candidates (truths/eliminations) so a
+  // lone-truth wrapper links nothing and is dropped.
+  const toLinks = coverSet => {
+    const all = new Set(coverSet);
+    for (const c of linkingCovers) all.add(c);
+    return [...all].filter(c => {
+      let relevant = 0;
+      for (const k of c.keys) if (baseKeySet.has(k) || elimSet.has(k)) relevant++;
+      return relevant >= 2;
+    }).map(coverToLink);
+  };
 
   if (allElims.length > 0) {
     const isRank0 = rank0Meta !== null;
     const hasChains = contrElims.length > 0 || assignElims.length > 0;
     let statusMsg, resultObj;
     if (isRank0) {
-      const { covers, count } = rank0Meta;
+      const { count } = rank0Meta;
       const chainNote = hasChains ? ' + forcing chains' : '';
       statusMsg = `✓ Valid! Rank-0${chainNote} — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} across ${count} valid cover assignment${count !== 1 ? 's' : ''}.`;
-      resultObj = { covers, elims: allElims, rank: 0, assignmentCount: count };
+      // Surface the found cover as auto-generated LINKS (dashed, ≤1 true).
+      resultObj = { covers: toLinks(rank0.coverUnion), elims: allElims, rank: 0, assignmentCount: count };
+    } else if (minM !== undefined && byM.get(minM) && byM.get(minM).exampleCovers) {
+      // Not rank-0, but a covering exists at m = minM (rank r = minM − n). Surface that
+      // minimal cover as links so the structure is shown consistently. The specific
+      // eliminations still come from the forcing-chain engine.
+      const r = minM - n;
+      statusMsg = `✓ Valid (rank-${r}) — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} via truth forcing chains.`;
+      resultObj = { covers: toLinks(byM.get(minM).coverUnion), elims: allElims, rank: r, assignmentCount: null };
     } else {
-      const rankNote = minM !== undefined ? ` (rank-${minM - n} structure)` : '';
-      statusMsg = `✓ Valid${rankNote} — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} via truth forcing chains.`;
-      resultObj = { covers: null, elims: allElims, rank: null, assignmentCount: null };
+      // No exhaustive covering (the DFS was skipped for a large truth set, or the
+      // rank exceeds its depth). Fall back to a fast greedy cover for display only —
+      // the eliminations still come from the forcing-chain engine.
+      const gc = greedyCover(baseKeySet, potCovers);
+      const links = gc.complete ? toLinks(gc.covers) : [];
+      const covers = links.length ? links : null;
+      statusMsg = `✓ Valid — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} via truth forcing chains${covers ? ' (cover shown)' : ''}.`;
+      resultObj = { covers, elims: allElims, rank: null, assignmentCount: null };
     }
     lastCheck = resultObj;
-    buildGrid(); applyAllHighlights();
+    buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel();
     showCheckResult(resultObj, potCovers.length);
     setStatus(statusMsg, 'ok');
     return;
@@ -1000,8 +1053,44 @@ function _checkMoveImpl() {
   } else {
     setStatus(`No forcing eliminations found — structure rank exceeds search depth (${MAX_M - n}).`, 'err');
   }
+  lastCheck = null;
+  buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel();
   showCheckResult(null, potCovers.length);
 } // end _checkMoveImpl
+
+// Convert a raw cover set (from buildAllSets) into a link render object (dashed).
+function coverToLink(cover) {
+  if (cover.type === 'cell') {
+    return { isCellTruth: true, keys: cover.keys, keySet: cover.keySet, sig: cover.sig,
+             label: cover.label, fromKey: cover.keys[0], color: TRUTH_COLOR };
+  }
+  const link = { isCellTruth: false, unit: cover.unit, digit: cover.digit,
+                 keys: cover.keys, keySet: cover.keySet, sig: cover.sig, label: cover.label };
+  link.color = truthTypeColor(link);
+  return link;
+}
+
+// Greedy set cover of the truth candidates — polynomial, for display only. Used when
+// the exhaustive DFS is skipped (too many truths). Repeatedly picks the cover that
+// spans the most still-uncovered truth keys. May not be minimal, but is fast and valid.
+// Returns { covers, complete } where complete = true iff every truth key is covered.
+function greedyCover(baseKeys, potCovers) {
+  const remaining = new Set(baseKeys);
+  const chosen = [], used = new Set();
+  while (remaining.size) {
+    let best = null, bestCount = 0;
+    for (const c of potCovers) {
+      if (used.has(c)) continue;
+      let cnt = 0;
+      for (const k of c._baseKeys) if (remaining.has(k)) cnt++;
+      if (cnt > bestCount) { bestCount = cnt; best = c; }
+    }
+    if (!best) break;
+    chosen.push(best); used.add(best);
+    for (const k of best._baseKeys) remaining.delete(k);
+  }
+  return { covers: chosen, complete: remaining.size === 0 };
+}
 
 // For each non-base candidate X, assume X is true, propagate Sudoku constraints
 // through truth-forced placements, and check for contradiction.
@@ -1296,7 +1385,7 @@ function showCheckResult(result, numPC, numFound) {
   const rankTag = result.rank === 0 ? 'Rank-0' : result.rank !== null ? `Rank-${result.rank}` : 'Forcing chains';
   const countNote = result.assignmentCount > 1 ? ` · ${result.assignmentCount} valid assignments` : '';
   const coverLine = result.covers
-    ? `<div><span style="color:#889">Example covers:</span> <span class="cr-covers">${result.covers.map(c => c.label).join(', ')}</span></div>`
+    ? `<div><span style="color:#889">Covers:</span> <span class="cr-covers">${result.covers.map(c => c.label).join(', ')}</span></div>`
     : `<div><span style="color:#889">Method:</span> truth forcing chain (case-split)</div>`;
   el.innerHTML =
     `<div class="cr-head">✓ ${rankTag}${countNote}</div>` +
@@ -1311,8 +1400,8 @@ function applyEliminations() {
   pushUndo();
   for (const [cell, digit] of lastCheck.elims)
     cands[cell].delete(digit);
-  lastCheck = null;
-  userTruths = [];   // clear the highlighted truths along with their eliminations
+  lastCheck = null;  // clears the auto-generated links too (derived from lastCheck)
+  userTruths = [];   // clear the truths along with their eliminations
   buildGrid();
   applyAllHighlights();
   renderTruthSVG();
@@ -1417,46 +1506,36 @@ function buildGrid() {
 }
 
 function applyAllHighlights() {
-  // Apply truth colors
-  for (const truth of userTruths) {
-    for (const k of truth.keys) {
-      const el = candEl(k);
-      if (el) {
-        el.style.background  = TRUTH_COLOR;
-        el.style.color       = '#fff';
-        el.style.fontWeight  = '700';
-        el.style.border      = '1px solid #000';
-        el.style.borderRadius= '2px';
-        el.style.width       = '17px';
-        el.style.height      = '17px';
-        el.style.justifySelf = 'center';
-        el.style.alignSelf   = 'center';
-        el.style.position    = 'relative';
-        el.style.zIndex      = '1';
-      }
-    }
-  }
-  // Apply check eliminations (override truth color if needed)
+  const setBadge = (el, bg, fg) => {
+    el.style.background  = bg;
+    el.style.color       = fg;
+    el.style.fontWeight  = '700';
+    el.style.border      = '1px solid #000';
+    el.style.borderRadius= '2px';
+    el.style.width       = '17px';
+    el.style.height      = '17px';
+    el.style.justifySelf = 'center';
+    el.style.alignSelf   = 'center';
+    el.style.position    = 'relative';
+    el.style.zIndex      = '1';
+    el.style.boxShadow   = '';
+  };
+
+  const truthKeySet = new Set(userTruths.flatMap(t => t.keys));
+
+  // Truth candidates → solid blue fill (≥1 true)
+  for (const truth of userTruths)
+    for (const k of truth.keys) { const el = candEl(k); if (el) setBadge(el, TRUTH_COLOR, '#fff'); }
+
+  // Eliminations → red (overrides). A blue ring marks a cannibalistic elim that
+  // was also a truth key. (Non-eliminated link candidates are left untouched.)
   if (lastCheck) {
-    const baseKeySet = new Set(userTruths.flatMap(t => t.keys));
     for (const [c, d] of lastCheck.elims) {
       const k = candKey(c, d);
       const el = candEl(k);
       if (el) {
-        el.style.background  = '#ff0000';
-        el.style.color       = '#fff';
-        el.style.fontWeight  = '700';
-        el.style.border      = '1px solid #000';
-        el.style.borderRadius= '2px';
-        el.style.width       = '17px';
-        el.style.height      = '17px';
-        el.style.justifySelf = 'center';
-        el.style.alignSelf   = 'center';
-        el.style.position    = 'relative';
-        el.style.zIndex      = '1';
-        // Cannibalistic: eliminated candidate was also a truth key. Keep the red
-        // fill (status = eliminated) and add a blue ring (provenance = truth).
-        el.style.boxShadow   = baseKeySet.has(k) ? `0 0 0 2px ${TRUTH_COLOR}` : '';
+        setBadge(el, '#ff0000', '#fff');
+        el.style.boxShadow = truthKeySet.has(k) ? `0 0 0 2px ${TRUTH_COLOR}` : '';
       }
     }
   }
@@ -1490,6 +1569,11 @@ function renderTruthSVG() {
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
   const gridR = document.getElementById('grid').getBoundingClientRect();
 
+  // A link only connects meaningful nodes: the truth candidates it covers, and the
+  // eliminated candidates it explains. Non-eliminated link candidates are ignored.
+  const truthKeySet = new Set(userTruths.flatMap(t => t.keys));
+  const elimKeySet  = new Set(((lastCheck && lastCheck.elims) || []).map(([c, d]) => candKey(c, d)));
+
   // Position of digit in a cell (works even if the digit isn't a current candidate)
   function ghostCandCenter(cellIdx, digit) {
     const cellEl = cellEls[cellIdx];
@@ -1512,7 +1596,7 @@ function renderTruthSVG() {
   // free ends (at digit badges) are trimmed back by GAP; interior corners are kept
   // exact and joined with a miter so the bend is filled cleanly (no cap notch).
   // GAP is just under the badge half-width (17px badge → 8.5px) so lines meet the edge.
-  function drawPolyline(pts, color) {
+  function drawPolyline(pts, color, dashed) {
     const GAP = 8;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
@@ -1527,18 +1611,20 @@ function renderTruthSVG() {
     poly.setAttribute('points', p.map(a => a[0] + ',' + a[1]).join(' '));
     poly.setAttribute('fill', 'none');
     poly.setAttribute('stroke', color);
-    poly.setAttribute('stroke-width', '4.5');
+    poly.setAttribute('stroke-width', dashed ? '2.5' : '4.5');
     poly.setAttribute('stroke-linecap', 'butt');
     poly.setAttribute('stroke-linejoin', 'miter');
+    if (dashed) poly.setAttribute('stroke-dasharray', '5,4');
     lineTarget.appendChild(poly);
   }
 
-  for (const truth of userTruths) {
-    const color = truth.color;
+  // Render one set (truth or link). Truths draw solid + thick; links dashed + thin.
+  function renderSet(set, dashed) {
+    const color = set.color;
 
-    if (truth.isCellTruth) {
-      const el = cellEls[keyCell(truth.fromKey)];
-      if (!el) continue;
+    if (set.isCellTruth) {
+      const el = cellEls[keyCell(set.fromKey)];
+      if (!el) return;
       const r = el.getBoundingClientRect();
       // Centered square half the cell's size: each side sits midway between the
       // cell edge and the cell centre.
@@ -1553,48 +1639,84 @@ function renderTruthSVG() {
       rect.setAttribute('rx', '4');
       rect.setAttribute('fill', 'none');
       rect.setAttribute('stroke', color);
-      rect.setAttribute('stroke-width', '4.5');
-      rect.setAttribute('opacity', '0.65');
+      rect.setAttribute('stroke-width', dashed ? '2.5' : '4.5');
+      if (dashed) rect.setAttribute('stroke-dasharray', '5,4');
+      rect.setAttribute('opacity', dashed ? '0.5' : '0.7');
       svg.appendChild(rect);
     } else {
-      const sortedKeys = [...truth.keys].sort((a, b) => keyCell(a) - keyCell(b));
-      if (sortedKeys.length < 2) continue;
-      const digit = keyDigit(sortedKeys[0]);
+      const digit = keyDigit(set.keys[0]);
 
-      // Group the segments so their translucency composites once (see lineTarget).
-      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('opacity', '0.65');
-      svg.appendChild(group);
-      lineTarget = group;
-
-      for (let i = 0; i < sortedKeys.length - 1; i++) {
-        const k1 = sortedKeys[i], k2 = sortedKeys[i + 1];
+      // Draw a connector between two candidate keys (L-routed for diagonals).
+      const connect = (k1, k2) => {
         const c1 = keyCell(k1), c2 = keyCell(k2);
         const row1 = Math.floor(c1 / 9), col1 = c1 % 9;
         const row2 = Math.floor(c2 / 9), col2 = c2 % 9;
-
         const p1 = candCenter(k1) || ghostCandCenter(c1, digit);
         const p2 = candCenter(k2) || ghostCandCenter(c2, digit);
-        if (!p1 || !p2) continue;
-
+        if (!p1 || !p2) return;
         if (row1 !== row2 && col1 !== col2) {
-          // Diagonal segment: route L-shaped. The corner is at the intersection of
-          // the bottom endpoint's x and the top endpoint's y — pixel-perfect because
-          // the same digit always sits at the same sub-position within any cell.
+          // Diagonal → route L-shaped (corner at bottom.x / top.y, pixel-perfect).
           const [topKey, botKey] = row1 <= row2 ? [k1, k2] : [k2, k1];
           const topPt = candCenter(topKey) || ghostCandCenter(keyCell(topKey), digit);
           const botPt = candCenter(botKey) || ghostCandCenter(keyCell(botKey), digit);
-          if (topPt && botPt) {
-            const cornerPt = [botPt[0], topPt[1]];
-            drawPolyline([botPt, cornerPt, topPt], color);
-            continue;
-          }
+          if (topPt && botPt) { drawPolyline([botPt, [botPt[0], topPt[1]], topPt], color, dashed); return; }
         }
-        // Straight segment (same row or same col, or corner fallback)
-        drawPolyline([p1, p2], color);
+        drawPolyline([p1, p2], color, dashed);
+      };
+
+      // Which segments to draw?
+      const pairs = [];
+      if (!dashed) {
+        // Truth: chain all of its candidates in sorted order.
+        const sorted = [...set.keys].sort((a, b) => keyCell(a) - keyCell(b));
+        for (let i = 0; i < sorted.length - 1; i++) pairs.push([sorted[i], sorted[i + 1]]);
+      } else {
+        // Link: chain the truth candidates it covers, and connect each eliminated
+        // candidate to its nearest covered truth. Non-eliminated candidates are ignored.
+        const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
+        const eKeys = set.keys.filter(k => elimKeySet.has(k) && !truthKeySet.has(k));
+        for (let i = 0; i < tKeys.length - 1; i++) pairs.push([tKeys[i], tKeys[i + 1]]);
+        for (const e of eKeys) {
+          const er = cellRow(keyCell(e)), ec = cellCol(keyCell(e));
+          let best = tKeys[0], bd = Infinity;
+          for (const t of tKeys) {
+            const d = Math.abs(cellRow(keyCell(t)) - er) + Math.abs(cellCol(keyCell(t)) - ec);
+            if (d < bd) { bd = d; best = t; }
+          }
+          if (best !== undefined) pairs.push([e, best]);
+        }
       }
+      if (!pairs.length) return;
+
+      // Group the segments so their translucency composites once (see lineTarget).
+      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      group.setAttribute('opacity', dashed ? '0.5' : '0.7');
+      svg.appendChild(group);
+      lineTarget = group;
+      for (const [k1, k2] of pairs) connect(k1, k2);
     }
   }
+
+  for (const truth of userTruths) renderSet(truth, false);
+  if (showLinks)
+    for (const link of ((lastCheck && lastCheck.covers) || [])) renderSet(link, true);
+}
+
+// Toggle visibility of the auto-generated cover links on the grid.
+function toggleLinks() {
+  showLinks = !showLinks;
+  updateLinksToggle();
+  renderTruthSVG();
+}
+
+function updateLinksToggle() {
+  const btn = document.getElementById('btn-links');
+  if (btn) { btn.classList.toggle('active', showLinks); btn.textContent = showLinks ? 'Links' : 'Links off'; }
+}
+
+// Opacity (0–100) of the big given/solved digits, via a CSS variable.
+function setDigitOpacity(pct) {
+  document.documentElement.style.setProperty('--digit-opacity', pct / 100);
 }
 
 function clearDragLine() {
@@ -1633,18 +1755,33 @@ function renderTruthPanel() {
   panel.innerHTML = '';
 
   if (!userTruths.length) {
-    panel.innerHTML = '<div class="no-truths">No truths drawn yet.<br>Switch to Draw mode, then drag between candidates.</div>';
-    return;
+    panel.innerHTML = '<div class="no-truths">No truths drawn yet.<br>Switch to Draw Truths mode, then drag between candidates.</div>';
+  } else {
+    userTruths.forEach((truth, i) => {
+      const item = document.createElement('div');
+      item.className = 'truth-item';
+      item.innerHTML =
+        `<span class="truth-swatch" style="background:${truth.color}"></span>` +
+        `<span class="truth-label">${truth.label}</span>` +
+        `<button class="truth-del" title="Remove" onclick="removeTruth(${i})">×</button>`;
+      panel.appendChild(item);
+    });
   }
 
-  userTruths.forEach((truth, i) => {
+  // Links section — the auto-generated cover from the last valid rank-0 check.
+  // Display-only (not user-editable).
+  const links = (lastCheck && lastCheck.covers) || [];
+  const linkPanel = document.getElementById('link-panel');
+  const linkList  = document.getElementById('link-list');
+  linkList.innerHTML = '';
+  linkPanel.style.display = links.length ? 'block' : 'none';
+  links.forEach(link => {
     const item = document.createElement('div');
     item.className = 'truth-item';
     item.innerHTML =
-      `<span class="truth-swatch" style="background:${truth.color}"></span>` +
-      `<span class="truth-label">${truth.label}</span>` +
-      `<button class="truth-del" title="Remove" onclick="removeTruth(${i})">×</button>`;
-    panel.appendChild(item);
+      `<span class="link-swatch" style="border:2px dashed ${link.color}"></span>` +
+      `<span class="truth-label">${link.label}</span>`;
+    linkList.appendChild(item);
   });
 }
 
@@ -1677,7 +1814,7 @@ function clearChecking() {
 // Static per-mode instruction shown under the toolbar.
 const MODE_HINTS = {
   edit:      'Edit — click a candidate to remove it, or click a cell and press 1–9 to place a digit.',
-  draw:      'Draw Truths — drag between two candidates (same digit, shared unit) to add a truth, or click a cell for a cell-truth.',
+  draw:      'Draw Truths — drag between two candidates (same digit, shared unit) to add a truth, or click a cell for a cell-truth. Then Check Move: if valid, the covering links (dashed) and eliminations appear.',
   highlight: 'Highlight — pick a colour, then click or drag across cells to shade them.'
 };
 function updateModeHint() {
@@ -1718,7 +1855,7 @@ function setupDragHandlers() {
         // Click on cell body → cell truth
         const truth = cellTruthFromClick(i);
         if (truth) registerTruth(truth);
-        else setStatus('Cell has fewer than 2 candidates — cannot create cell truth.', 'err');
+        else setStatus('Cell has fewer than 2 candidates — cannot create a cell truth.', 'err');
       }
       return;
     }
@@ -1734,15 +1871,13 @@ function setupDragHandlers() {
       }
       pushUndo();
       const k = candKey(i, v);
-      // Remove any truths that included this candidate
+      // A candidate edit invalidates the last check (and its auto-generated links).
+      lastCheck = null;
+      clearCheckResult();
+      // Remove any truths that included this candidate.
       const before = userTruths.length;
       userTruths = userTruths.filter(t => !t.keySet.has(k));
-      if (userTruths.length !== before) {
-        userTruths.forEach(t => { t.color = truthTypeColor(t); });
-        lastCheck = null;
-        clearCheckResult();
-        setStatus('Candidate deleted — affected truths removed.', 'info');
-      }
+      if (userTruths.length !== before) setStatus('Candidate deleted — affected truths removed.', 'info');
       cands[i].delete(v);
       buildGrid();
       applyAllHighlights();
@@ -1814,15 +1949,11 @@ function setupDragHandlers() {
 
     pushUndo();
     placeDigit(selIdx, d);
-    // Remove any truth whose keys are no longer fully live (covers placed cell's
-    // other candidates, peer digit-candidates, etc.)
-    const before = userTruths.length;
+    // Placing a digit invalidates the last check (and its auto-generated links), and
+    // removes any truth whose keys are no longer fully live.
+    lastCheck = null;
+    clearCheckResult();
     userTruths = userTruths.filter(t => t.keys.every(k => cands[keyCell(k)].has(keyDigit(k))));
-    if (userTruths.length !== before) {
-      userTruths.forEach(t => { t.color = truthTypeColor(t); });
-      lastCheck = null;
-      clearCheckResult();
-    }
     const placedAt = cellName(selIdx);
     selIdx = -1;
     buildGrid();
