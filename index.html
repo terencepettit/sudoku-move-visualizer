@@ -112,6 +112,28 @@ body.highlight-mode #highlight-panel { display: block; }
 
 /* ── Main layout ── */
 #main { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+#board-col { display: flex; flex-direction: column; gap: 14px; flex-shrink: 0; }
+
+/* ── Legend ── */
+#legend {
+  display: flex; flex-wrap: wrap; gap: 12px 28px;
+  padding: 12px 14px;
+  background: #f7f7f7;
+  border: 1px solid #e4e4e4;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #37474f;
+}
+.legend-section { display: flex; flex-direction: column; gap: 6px; }
+.legend-title {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: #90a4ae; margin-bottom: 2px;
+}
+.legend-row { display: flex; align-items: center; gap: 9px; white-space: nowrap; line-height: 1; }
+.lg-badge {
+  width: 14px; height: 14px; border-radius: 2px; border: 1px solid #000; flex-shrink: 0;
+}
+.lg-sq { width: 13px; height: 13px; flex-shrink: 0; background: transparent; }
 
 /* ── Grid ── */
 /* Grid lines are real layout space, not an overlay: the 70px cell tracks are
@@ -361,10 +383,13 @@ body.highlight-mode .cell { cursor: pointer; }
 <div id="mode-hint"></div>
 
 <div id="main">
-  <div id="grid-wrap">
-    <div id="grid"></div>
-    <svg id="truth-svg"></svg>
-    <svg id="drag-svg"></svg>
+  <div id="board-col">
+    <div id="grid-wrap">
+      <div id="grid"></div>
+      <svg id="truth-svg"></svg>
+      <svg id="drag-svg"></svg>
+    </div>
+    <div id="legend"></div>
   </div>
 
   <div id="side-panel">
@@ -627,6 +652,41 @@ function setMode(m) {
 // ── Cell highlight (cosmetic) ────────────────────────────────────────────────
 
 const HIGHLIGHT_COLORS = ['#fffcd8','#d8eed9','#cfe8fc','#fad0de','#ffeac9','#ead2ee','#ffdce0'];
+
+// Build the legend explaining badge/line colours & styles (mirrors the render code).
+function buildLegend() {
+  const line = (color, dashed) =>
+    `<svg width="30" height="8" style="flex-shrink:0"><line x1="1" y1="4" x2="29" y2="4" ` +
+    `stroke="${color}" stroke-width="${dashed ? 2.5 : 3.5}" ` +
+    `${dashed ? 'stroke-dasharray="0.1,5" stroke-linecap="round"' : ''} ` +
+    `opacity="${dashed ? 0.5 : 0.7}"/></svg>`;
+  const sq = (color, dashed) =>
+    `<span class="lg-sq" style="border:2px ${dashed ? 'dotted' : 'solid'} ${color};opacity:${dashed ? 0.5 : 0.7}"></span>`;
+  const badge = (bg, ring) =>
+    `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:0 0 0 2px ${ring}` : ''}"></span>`;
+  const ROW = '#a020f0', COL = '#00702f', BOX = '#c05800', CELL = TRUTH_COLOR;
+  document.getElementById('legend').innerHTML = `
+    <div class="legend-section">
+      <div class="legend-title">Candidates</div>
+      <div class="legend-row">${badge(TRUTH_COLOR)} Truth (≥1 true)</div>
+      <div class="legend-row">${badge('#ff0000')} Eliminated</div>
+      <div class="legend-row">${badge('#ff0000', TRUTH_COLOR)} Elim. that was a truth</div>
+    </div>
+    <div class="legend-section">
+      <div class="legend-title">Truths — solid</div>
+      <div class="legend-row">${line(ROW)} Row</div>
+      <div class="legend-row">${line(COL)} Column</div>
+      <div class="legend-row">${line(BOX)} Box</div>
+      <div class="legend-row">${sq(CELL)} Cell</div>
+    </div>
+    <div class="legend-section">
+      <div class="legend-title">Links — dotted</div>
+      <div class="legend-row">${line(ROW, true)} Row</div>
+      <div class="legend-row">${line(COL, true)} Column</div>
+      <div class="legend-row">${line(BOX, true)} Box</div>
+      <div class="legend-row">${sq(CELL, true)} Cell</div>
+    </div>`;
+}
 
 function buildPalette() {
   const pal = document.getElementById('palette');
@@ -992,22 +1052,42 @@ function _checkMoveImpl() {
   for (const [c,d] of assignElims) elimSet.add(candKey(c,d));
   const allElims = [...elimSet].map(k => [keyCell(k), keyDigit(k)]);
 
-  // Also show EVERY cover that links a truth candidate to an eliminated one (not just
-  // the ones in the chosen minimal covering). Since every potCover already contains a
-  // truth candidate, a cover that also contains an eliminated candidate directly links
-  // truth → elimination, so we surface it as an alternative explanation.
+  // Beyond the covers of the chosen minimal covering, surface every cover that links a truth
+  // candidate to an eliminated one — the same unit holds both, so it visually explains why the
+  // elimination follows. This matters most for forcing-chain eliminations, which no cover of
+  // the minimal covering need touch (so without this they'd get no link at all). Broadly
+  // surfacing these is safe because the domination filter below removes the spurious/redundant
+  // ones (e.g. a column through just one cell of a hidden pair, when a box already covers more).
   const linkingCovers = potCovers.filter(c => c.keys.some(k => elimSet.has(k)));
 
-  // Build the link list for display: the given covering plus all truth→elim covers,
-  // keeping only those that touch ≥2 relevant candidates (truths/eliminations) so a
-  // lone-truth wrapper links nothing and is dropped.
+  // Build the link list for display: the minimal covering plus all truth→elim linking covers,
+  // keeping only those touching ≥2 relevant candidates (truths/eliminations) so a lone-truth
+  // wrapper, which links nothing, is dropped.
+  const isRelevant = k => baseKeySet.has(k) || elimSet.has(k);
+  const coverKind  = c => c.type === 'cell' ? 'cell' : c.unit < 9 ? 'row' : c.unit < 18 ? 'col' : 'box';
+  // When the same candidates can be linked by more than one unit, prefer the most specific
+  // geometry: a box is tighter than a row/column line. e.g. two cells that share a column but
+  // also sit in one box get a box link, not a column link laid over it.
+  const coverPrio  = c => ({ box: 3, col: 2, row: 1, cell: 4 }[coverKind(c)]);
+
   const toLinks = coverSet => {
     const all = new Set(coverSet);
     for (const c of linkingCovers) all.add(c);
-    return [...all].filter(c => {
-      let relevant = 0;
-      for (const k of c.keys) if (baseKeySet.has(k) || elimSet.has(k)) relevant++;
-      return relevant >= 2;
+    const list = [...all].filter(c => c.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0) >= 2);
+    // Drop a cover whose relevant candidates (truths + touched eliminations) are all also
+    // covered by another kept cover that explains at least as much: a strict superset always
+    // wins, and an exact tie is broken toward the more specific unit (box over line). A line
+    // that reaches an elimination the box doesn't is NOT dropped — its relevant set isn't a
+    // subset, so nothing dominates it.
+    return list.filter(c => {
+      const rel = c.keys.filter(isRelevant);
+      return !list.some(d => {
+        if (d === c) return false;
+        if (!rel.every(k => d.keySet.has(k))) return false;   // d must cover all of c's relevant keys
+        const dRelCount = d.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0);
+        if (dRelCount > rel.length) return true;              // d explains strictly more → dominates
+        return dRelCount === rel.length && coverPrio(d) > coverPrio(c); // tie → prefer specific unit
+      });
     }).map(coverToLink);
   };
 
@@ -1568,6 +1648,12 @@ function renderTruthSVG() {
   svg.innerHTML = '';
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
   const gridR = document.getElementById('grid').getBoundingClientRect();
+  // All coordinates below are derived from getBoundingClientRect, which already reflects
+  // any CSS `zoom` applied to #grid-wrap at narrow widths. The SVG has no intrinsic
+  // viewBox, so its user space would otherwise default to its unzoomed CSS width and the
+  // overlay would render shrunk toward the origin. Pinning the viewBox to the current
+  // (zoomed) wrap size makes the measured pixel coordinates map 1:1 at any zoom level.
+  svg.setAttribute('viewBox', `0 0 ${wrap.width} ${wrap.height}`);
 
   // A link only connects meaningful nodes: the truth candidates it covers, and the
   // eliminated candidates it explains. Non-eliminated link candidates are ignored.
@@ -1612,9 +1698,10 @@ function renderTruthSVG() {
     poly.setAttribute('fill', 'none');
     poly.setAttribute('stroke', color);
     poly.setAttribute('stroke-width', dashed ? '2.5' : '4.5');
-    poly.setAttribute('stroke-linecap', 'butt');
+    // Links: round-capped near-zero dashes → dotted. Truths: flat butt caps for clean corners.
+    poly.setAttribute('stroke-linecap', dashed ? 'round' : 'butt');
     poly.setAttribute('stroke-linejoin', 'miter');
-    if (dashed) poly.setAttribute('stroke-dasharray', '5,4');
+    if (dashed) poly.setAttribute('stroke-dasharray', '0.1,5');
     lineTarget.appendChild(poly);
   }
 
@@ -1640,7 +1727,7 @@ function renderTruthSVG() {
       rect.setAttribute('fill', 'none');
       rect.setAttribute('stroke', color);
       rect.setAttribute('stroke-width', dashed ? '2.5' : '4.5');
-      if (dashed) rect.setAttribute('stroke-dasharray', '5,4');
+      if (dashed) { rect.setAttribute('stroke-dasharray', '0.1,5'); rect.setAttribute('stroke-linecap', 'round'); }
       rect.setAttribute('opacity', dashed ? '0.5' : '0.7');
       svg.appendChild(rect);
     } else {
@@ -1688,12 +1775,36 @@ function renderTruthSVG() {
       }
       if (!pairs.length) return;
 
+      // Drop any segment that is collinear with and fully contained in a longer one, so
+      // e.g. two eliminations spoking to the same truth along a row don't draw two
+      // overlapping (doubled) dotted lines — the longer segment already passes over both.
+      const span = ([a, b]) => {
+        const ra = cellRow(keyCell(a)), ca = cellCol(keyCell(a));
+        const rb = cellRow(keyCell(b)), cb = cellCol(keyCell(b));
+        return { horiz: ra === rb, vert: ca === cb, r: ra, c: ca,
+                 rlo: Math.min(ra, rb), rhi: Math.max(ra, rb),
+                 clo: Math.min(ca, cb), chi: Math.max(ca, cb),
+                 len: Math.abs(ra - rb) + Math.abs(ca - cb) };
+      };
+      const spans = pairs.map(span);
+      const drawn = pairs.filter((p, i) => {
+        const s = spans[i];
+        return !pairs.some((q, j) => {
+          if (j === i) return false;
+          const t = spans[j];
+          if (t.len <= s.len) return false;                 // only a strictly longer one absorbs
+          if (s.horiz && t.horiz && s.r === t.r) return t.clo <= s.clo && s.chi <= t.chi;
+          if (s.vert  && t.vert  && s.c === t.c) return t.rlo <= s.rlo && s.rhi <= t.rhi;
+          return false;
+        });
+      });
+
       // Group the segments so their translucency composites once (see lineTarget).
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.setAttribute('opacity', dashed ? '0.5' : '0.7');
       svg.appendChild(group);
       lineTarget = group;
-      for (const [k1, k2] of pairs) connect(k1, k2);
+      for (const [k1, k2] of drawn) connect(k1, k2);
     }
   }
 
@@ -1732,6 +1843,9 @@ function updateDragLine(toClientX, toClientY) {
   if (!p1) return;
 
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
+  // Match truth-svg: pin the user space to the current (zoomed) wrap size so the drag
+  // line stays aligned when #grid-wrap is scaled by CSS `zoom` at narrow widths.
+  svg.setAttribute('viewBox', `0 0 ${wrap.width} ${wrap.height}`);
   const x2 = toClientX - wrap.left;
   const y2 = toClientY - wrap.top;
 
@@ -2023,6 +2137,7 @@ function loadPuzzle() {
 window.addEventListener('load', () => {
   setupDragHandlers();
   buildPalette();
+  buildLegend();
   updateModeHint();
   const hash = location.hash.slice(1);
   if (/^[0-9.]{81}$/.test(hash)) {
