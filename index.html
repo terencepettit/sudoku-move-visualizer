@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Sudoku Visualizer</title>
+<title>Sudoku Move Visualizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
@@ -441,6 +441,15 @@ const UNDO_LIMIT = 10;
 let undoStack = [];
 
 const TRUTH_COLOR = '#1a7fff';
+// Link "tube" half-widths (perpendicular distance from centre-line to each coloured edge),
+// per unit type. A row link is always horizontal and a column link always vertical, so the two
+// never share a line and can be the same width; only a box link runs collinearly with either
+// (its horizontal arm over a row, its vertical arm over a column), so box is one step wider to
+// nest outside. Every tube stays wider than a truth line (~4.5px) so a truth reads down the
+// centre. See drawTube().
+const LINK_TUBE_HALF = { row: 2, col: 2, box: 4 };
+// Corner radius for box link/truth elbows, matching the cell-square rx (rounded look).
+const LINK_CORNER_R = 4;
 
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
@@ -655,13 +664,18 @@ const HIGHLIGHT_COLORS = ['#fffcd8','#d8eed9','#cfe8fc','#fad0de','#ffeac9','#ea
 
 // Build the legend explaining badge/line colours & styles (mirrors the render code).
 function buildLegend() {
-  const line = (color, dashed) =>
-    `<svg width="30" height="8" style="flex-shrink:0"><line x1="1" y1="4" x2="29" y2="4" ` +
-    `stroke="${color}" stroke-width="${dashed ? 2.5 : 3.5}" ` +
-    `${dashed ? 'stroke-dasharray="0.1,5" stroke-linecap="round"' : ''} ` +
-    `opacity="${dashed ? 0.5 : 0.7}"/></svg>`;
-  const sq = (color, dashed) =>
-    `<span class="lg-sq" style="border:2px ${dashed ? 'dotted' : 'solid'} ${color};opacity:${dashed ? 0.5 : 0.7}"></span>`;
+  // Truth: solid centre line. Link: hollow "tube" — two coloured edges with a transparent gap,
+  // the gap widening row → col → box to mirror the nesting used on the grid.
+  const line = (color) =>
+    `<svg width="30" height="18" style="flex-shrink:0"><line x1="1" y1="9" x2="29" y2="9" ` +
+    `stroke="${color}" stroke-width="3.5" opacity="0.7"/></svg>`;
+  const tube = (color, gap) =>
+    `<svg width="30" height="18" style="flex-shrink:0">` +
+    `<rect x="1" y="${9 - gap}" width="28" height="${2 * gap}" fill="${color}" opacity="0.1"/>` +
+    `<line x1="1" y1="${9 - gap}" x2="29" y2="${9 - gap}" stroke="${color}" stroke-width="1" opacity="0.9"/>` +
+    `<line x1="1" y1="${9 + gap}" x2="29" y2="${9 + gap}" stroke="${color}" stroke-width="1" opacity="0.9"/></svg>`;
+  const sqTruth = (color) => `<span class="lg-sq" style="background:${color};opacity:0.7"></span>`;
+  const sqLink  = (color) => `<span class="lg-sq" style="border:2px solid ${color};background:${color}1a;opacity:0.85"></span>`;
   const badge = (bg, ring) =>
     `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:0 0 0 2px ${ring}` : ''}"></span>`;
   const ROW = '#a020f0', COL = '#00702f', BOX = '#c05800', CELL = TRUTH_COLOR;
@@ -677,14 +691,14 @@ function buildLegend() {
       <div class="legend-row">${line(ROW)} Row</div>
       <div class="legend-row">${line(COL)} Column</div>
       <div class="legend-row">${line(BOX)} Box</div>
-      <div class="legend-row">${sq(CELL)} Cell</div>
+      <div class="legend-row">${sqTruth(CELL)} Cell</div>
     </div>
     <div class="legend-section">
-      <div class="legend-title">Links — dotted</div>
-      <div class="legend-row">${line(ROW, true)} Row</div>
-      <div class="legend-row">${line(COL, true)} Column</div>
-      <div class="legend-row">${line(BOX, true)} Box</div>
-      <div class="legend-row">${sq(CELL, true)} Cell</div>
+      <div class="legend-title">Links — bordered</div>
+      <div class="legend-row">${tube(ROW, 1.5)} Row</div>
+      <div class="legend-row">${tube(COL, 1.5)} Column</div>
+      <div class="legend-row">${tube(BOX, 3.5)} Box</div>
+      <div class="legend-row">${sqLink(CELL)} Cell</div>
     </div>`;
 }
 
@@ -1070,25 +1084,25 @@ function _checkMoveImpl() {
   // also sit in one box get a box link, not a column link laid over it.
   const coverPrio  = c => ({ box: 3, col: 2, row: 1, cell: 4 }[coverKind(c)]);
 
+  const relCount = c => c.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0);
   const toLinks = coverSet => {
     const all = new Set(coverSet);
     for (const c of linkingCovers) all.add(c);
-    const list = [...all].filter(c => c.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0) >= 2);
-    // Drop a cover whose relevant candidates (truths + touched eliminations) are all also
-    // covered by another kept cover that explains at least as much: a strict superset always
-    // wins, and an exact tie is broken toward the more specific unit (box over line). A line
-    // that reaches an elimination the box doesn't is NOT dropped — its relevant set isn't a
-    // subset, so nothing dominates it.
-    return list.filter(c => {
+    const list = [...all].filter(c => relCount(c) >= 2);
+    // Drop any cover that is REDUNDANT: every relevant candidate it touches (truths + touched
+    // eliminations) is also covered by the union of the OTHER retained covers, so it adds no
+    // unique explanation. This removes "bridge" covers — e.g. a box that merely relays one
+    // column's eliminations to a truth its own column already covers — which a one-cover-at-a-time
+    // domination test misses when it takes two covers together to subsume the box. Covers are
+    // considered smallest-first (ties: cell < row < col < box, so a box is kept over a line when
+    // two are mutually redundant); any cover that uniquely explains a candidate is always kept.
+    const retained = new Set(list);
+    const order = [...list].sort((a, b) => relCount(a) - relCount(b) || coverPrio(a) - coverPrio(b));
+    for (const c of order) {
       const rel = c.keys.filter(isRelevant);
-      return !list.some(d => {
-        if (d === c) return false;
-        if (!rel.every(k => d.keySet.has(k))) return false;   // d must cover all of c's relevant keys
-        const dRelCount = d.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0);
-        if (dRelCount > rel.length) return true;              // d explains strictly more → dominates
-        return dRelCount === rel.length && coverPrio(d) > coverPrio(c); // tie → prefer specific unit
-      });
-    }).map(coverToLink);
+      if (rel.every(k => [...retained].some(d => d !== c && d.keySet.has(k)))) retained.delete(c);
+    }
+    return list.filter(c => retained.has(c)).map(coverToLink);
   };
 
   if (allElims.length > 0) {
@@ -1643,6 +1657,24 @@ function cellCenter(cellIdx) {
 
 // ── Truth SVG ──────────────────────────────────────────────────────────────
 
+// SVG path string through pts (array of [x,y]) with each interior corner rounded to radius r
+// (clamped to half the shorter adjacent segment). A plain line path when r is 0 or pts has <3.
+function roundedPath(pts, r) {
+  if (!pts.length) return '';
+  let d = `M ${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const inLen = Math.hypot(cx - px, cy - py) || 1, outLen = Math.hypot(nx - cx, ny - cy) || 1;
+    const rr = Math.min(r, inLen / 2, outLen / 2);
+    if (rr <= 0.01) { d += ` L ${cx} ${cy}`; continue; }
+    const a = [cx - (cx - px) / inLen * rr, cy - (cy - py) / inLen * rr];
+    const b = [cx + (nx - cx) / outLen * rr, cy + (ny - cy) / outLen * rr];
+    d += ` L ${a[0]} ${a[1]} Q ${cx} ${cy} ${b[0]} ${b[1]}`;
+  }
+  const last = pts[pts.length - 1];
+  return d + ` L ${last[0]} ${last[1]}`;
+}
+
 function renderTruthSVG() {
   const svg = document.getElementById('truth-svg');
   svg.innerHTML = '';
@@ -1693,19 +1725,63 @@ function renderTruthSVG() {
     };
     trim(0, 1);          // start end → toward next point
     trim(n - 1, n - 2);  // finish end → toward previous point
-    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    poly.setAttribute('points', p.map(a => a[0] + ',' + a[1]).join(' '));
-    poly.setAttribute('fill', 'none');
-    poly.setAttribute('stroke', color);
-    poly.setAttribute('stroke-width', dashed ? '2.5' : '4.5');
-    // Links: round-capped near-zero dashes → dotted. Truths: flat butt caps for clean corners.
-    poly.setAttribute('stroke-linecap', dashed ? 'round' : 'butt');
-    poly.setAttribute('stroke-linejoin', 'miter');
-    if (dashed) poly.setAttribute('stroke-dasharray', '0.1,5');
-    lineTarget.appendChild(poly);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', roundedPath(p, LINK_CORNER_R));   // rounded elbows (matches cell-square rx)
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', dashed ? '2.5' : '3.5');
+    path.setAttribute('stroke-linecap', dashed ? 'round' : 'butt');
+    path.setAttribute('stroke-linejoin', 'round');
+    if (dashed) path.setAttribute('stroke-dasharray', '0.1,5');
+    lineTarget.appendChild(path);
   }
 
-  // Render one set (truth or link). Truths draw solid + thick; links dashed + thin.
+  // Draw a link as a tube: a faint (10%) coloured interior band with a 1px coloured edge on each
+  // side, half-width W. The near-transparent centre lets anything it stacks over (a truth line, a
+  // narrower link) show through. Badge ends trim back by GAP; interior L-corners extend by W so the
+  // two arms meet. Segments are axis-aligned (links route straight or L-shaped).
+  function drawTube(pts, color, W) {
+    const GAP = 8, FILL_OP = 0.05, EDGE_OP = 0.7;
+    const p = pts.map(a => [a[0], a[1]]);
+    const n = p.length;
+    // Trim the two badge ends inward by GAP along their segment direction.
+    const trim = (from, to) => {
+      const dx = p[to][0] - p[from][0], dy = p[to][1] - p[from][1], len = Math.hypot(dx, dy);
+      if (len > GAP) { p[from][0] += dx / len * GAP; p[from][1] += dy / len * GAP; }
+    };
+    trim(0, 1); trim(n - 1, n - 2);
+    // Left-perpendicular unit of each segment (rotate direction 90°: (dx,dy) → (-dy,dx)).
+    const perp = [];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = Math.sign(p[i + 1][0] - p[i][0]), dy = Math.sign(p[i + 1][1] - p[i][1]);
+      perp.push([-dy, dx]);
+    }
+    // Build an offset edge as ONE polyline: each interior vertex is offset by the sum of its two
+    // adjacent segment perpendiculars — the miter point of the right-angle bend — so the edge
+    // turns the corner in a single clean vertex instead of two segments overshooting and crossing.
+    const offset = sgn => p.map((pt, i) => {
+      const pa = perp[i === 0 ? 0 : i - 1], pb = perp[i === n - 1 ? n - 2 : i];
+      const interior = i > 0 && i < n - 1;
+      const ox = interior ? pa[0] + pb[0] : pa[0], oy = interior ? pa[1] + pb[1] : pa[1];
+      return [pt[0] + ox * sgn * W, pt[1] + oy * sgn * W];
+    });
+    const stroke = (d, width, op) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      el.setAttribute('d', d); el.setAttribute('fill', 'none');
+      el.setAttribute('stroke', color); el.setAttribute('stroke-width', width);
+      el.setAttribute('opacity', op); el.setAttribute('stroke-linejoin', 'round');
+      lineTarget.appendChild(el);
+    };
+    // Fill band: thick centre stroke; round join gives the outer corner a radius of W. Edges:
+    // rounded-corner outline paths (radius LINK_CORNER_R, matching the cell squares).
+    stroke(roundedPath(p, 0), 2 * W, FILL_OP);
+    stroke(roundedPath(offset(1), LINK_CORNER_R), 1, EDGE_OP);
+    stroke(roundedPath(offset(-1), LINK_CORNER_R), 1, EDGE_OP);
+  }
+
+  // Render one set (truth or link). Truths draw as a solid line / filled square; links draw as
+  // a hollow "tube" — a transparent band with the unit colour on its two long edges — / a
+  // bordered square, so a truth and any number of links over the same run stack and stay visible.
   function renderSet(set, dashed) {
     const color = set.color;
 
@@ -1714,7 +1790,7 @@ function renderTruthSVG() {
       if (!el) return;
       const r = el.getBoundingClientRect();
       // Centered square half the cell's size: each side sits midway between the
-      // cell edge and the cell centre.
+      // cell edge and the cell centre. Cell truth → filled; cell link → hollow bordered.
       const cx = (r.left + r.right) / 2 - wrap.left;
       const cy = (r.top + r.bottom) / 2 - wrap.top;
       const halfW = r.width / 4, halfH = r.height / 4;
@@ -1724,16 +1800,18 @@ function renderTruthSVG() {
       rect.setAttribute('width',  halfW * 2);
       rect.setAttribute('height', halfH * 2);
       rect.setAttribute('rx', '4');
-      rect.setAttribute('fill', 'none');
+      rect.setAttribute('fill', color);
+      rect.setAttribute('fill-opacity', dashed ? '0.1' : '0.7');   // link: faint 10% fill; truth: solid
       rect.setAttribute('stroke', color);
-      rect.setAttribute('stroke-width', dashed ? '2.5' : '4.5');
-      if (dashed) { rect.setAttribute('stroke-dasharray', '0.1,5'); rect.setAttribute('stroke-linecap', 'round'); }
-      rect.setAttribute('opacity', dashed ? '0.5' : '0.7');
+      rect.setAttribute('stroke-width', '1');
+      rect.setAttribute('stroke-opacity', '0.7');
       svg.appendChild(rect);
     } else {
       const digit = keyDigit(set.keys[0]);
+      const tubeW = dashed ? LINK_TUBE_HALF[set.unit < 9 ? 'row' : set.unit < 18 ? 'col' : 'box'] : 0;
 
-      // Draw a connector between two candidate keys (L-routed for diagonals).
+      // Draw a connector between two candidate keys (L-routed for diagonals). Truths draw a
+      // solid centre line; links draw a hollow tube of half-width tubeW.
       const connect = (k1, k2) => {
         const c1 = keyCell(k1), c2 = keyCell(k2);
         const row1 = Math.floor(c1 / 9), col1 = c1 % 9;
@@ -1741,14 +1819,19 @@ function renderTruthSVG() {
         const p1 = candCenter(k1) || ghostCandCenter(c1, digit);
         const p2 = candCenter(k2) || ghostCandCenter(c2, digit);
         if (!p1 || !p2) return;
+        let pts;
         if (row1 !== row2 && col1 !== col2) {
           // Diagonal → route L-shaped (corner at bottom.x / top.y, pixel-perfect).
           const [topKey, botKey] = row1 <= row2 ? [k1, k2] : [k2, k1];
           const topPt = candCenter(topKey) || ghostCandCenter(keyCell(topKey), digit);
           const botPt = candCenter(botKey) || ghostCandCenter(keyCell(botKey), digit);
-          if (topPt && botPt) { drawPolyline([botPt, [botPt[0], topPt[1]], topPt], color, dashed); return; }
+          if (!topPt || !botPt) return;
+          pts = [botPt, [botPt[0], topPt[1]], topPt];
+        } else {
+          pts = [p1, p2];
         }
-        drawPolyline([p1, p2], color, dashed);
+        if (dashed) drawTube(pts, color, tubeW);
+        else        drawPolyline(pts, color, false);
       };
 
       // Which segments to draw?
@@ -1758,19 +1841,30 @@ function renderTruthSVG() {
         const sorted = [...set.keys].sort((a, b) => keyCell(a) - keyCell(b));
         for (let i = 0; i < sorted.length - 1; i++) pairs.push([sorted[i], sorted[i + 1]]);
       } else {
-        // Link: chain the truth candidates it covers, and connect each eliminated
-        // candidate to its nearest covered truth. Non-eliminated candidates are ignored.
+        // Link: chain the truth candidates it covers, then attach each eliminated candidate to
+        // the nearest node ALREADY in the tree (a truth, or an elimination already attached),
+        // growing outward. Pointing every elimination straight at a truth can make two L-routes
+        // overlap into a doubled (darker) line when one's corner passes through another's cell;
+        // growing a tree instead routes the far elimination through the near one. Non-eliminated
+        // candidates are ignored.
         const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
         const eKeys = set.keys.filter(k => elimKeySet.has(k) && !truthKeySet.has(k));
         for (let i = 0; i < tKeys.length - 1; i++) pairs.push([tKeys[i], tKeys[i + 1]]);
-        for (const e of eKeys) {
-          const er = cellRow(keyCell(e)), ec = cellCol(keyCell(e));
-          let best = tKeys[0], bd = Infinity;
-          for (const t of tKeys) {
-            const d = Math.abs(cellRow(keyCell(t)) - er) + Math.abs(cellCol(keyCell(t)) - ec);
-            if (d < bd) { bd = d; best = t; }
+        const connected = tKeys.slice();
+        const remaining = eKeys.slice();
+        while (remaining.length && connected.length) {
+          let bi = -1, bt = null, bd = Infinity;
+          for (let i = 0; i < remaining.length; i++) {
+            const er = cellRow(keyCell(remaining[i])), ec = cellCol(keyCell(remaining[i]));
+            for (const c of connected) {
+              const d = Math.abs(cellRow(keyCell(c)) - er) + Math.abs(cellCol(keyCell(c)) - ec);
+              if (d < bd) { bd = d; bi = i; bt = c; }
+            }
           }
-          if (best !== undefined) pairs.push([e, best]);
+          if (bi < 0) break;
+          const e = remaining.splice(bi, 1)[0];
+          pairs.push([e, bt]);
+          connected.push(e);
         }
       }
       if (!pairs.length) return;
@@ -1801,16 +1895,20 @@ function renderTruthSVG() {
 
       // Group the segments so their translucency composites once (see lineTarget).
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('opacity', dashed ? '0.5' : '0.7');
+      group.setAttribute('opacity', dashed ? '1' : '0.7');
       svg.appendChild(group);
       lineTarget = group;
       for (const [k1, k2] of drawn) connect(k1, k2);
     }
   }
 
-  for (const truth of userTruths) renderSet(truth, false);
+  // Draw order (bottom → top): cell truths (filled squares) sit behind everything; then links;
+  // then line truths (row/col/box) on top, so a truth's solid centre line sits in the hollow
+  // middle of any tube it stacks with, with the tube's coloured edges either side.
+  for (const truth of userTruths) if (truth.isCellTruth) renderSet(truth, false);
   if (showLinks)
     for (const link of ((lastCheck && lastCheck.covers) || [])) renderSet(link, true);
+  for (const truth of userTruths) if (!truth.isCellTruth) renderSet(truth, false);
 }
 
 // Toggle visibility of the auto-generated cover links on the grid.
