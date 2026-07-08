@@ -143,22 +143,24 @@ body.highlight-mode #highlight-panel { display: block; }
 #grid-wrap {
   flex-shrink: 0;
   position: relative;
-  width: 652px;
-  height: 652px;
+  width: 648px;
+  height: 648px;
 }
 
-/* 70px cell tracks separated by grey gap tracks: 1px thin lines within a box and
-   4px box lines between boxes, both showing the #grid background. The 4px padding
-   forms the (matching) outer border. */
+/* 70px cell tracks separated by gap tracks. The thin 1px within-box lines show the light grid
+   background; the thick 3px box separators are dark .box-line divs laid into the wide gap tracks,
+   and the 3px dark border forms the (matching) outer border. */
 #grid {
   display: inline-grid;
-  grid-template-columns: 70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px;
-  grid-template-rows:    70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px 4px 70px 1px 70px 1px 70px;
-  background: #72787b;
-  padding: 4px;
+  grid-template-columns: 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
+  grid-template-rows:    70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
+  background: #aab0b3;           /* thin within-box grid lines (lighter / more transparent) */
+  border: 3px solid #72787b;     /* thick outer border */
   position: absolute;
   left: 0; top: 0;
 }
+/* Thick box separators — dark, over the light background; the thin 1px gaps keep the background. */
+.box-line { background: #72787b; }
 
 .cell {
   width: 70px; height: 70px;
@@ -314,6 +316,21 @@ body.highlight-mode .cell { cursor: pointer; }
   line-height: 1;
 }
 .truth-del:hover { background: #ffcdd2; color: #c62828; }
+/* Per-link visibility toggle (eye) in the LINKS list. */
+.link-toggle {
+  padding: 2px 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+  color: #607d8b;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.link-toggle:hover { background: #cfd8dc; color: #37474f; }
+.truth-item.link-off { opacity: 0.5; }
+.truth-item.link-off .truth-label { text-decoration: line-through; }
 
 .no-truths {
   color: #78909c;
@@ -664,27 +681,29 @@ const HIGHLIGHT_COLORS = ['#fffcd8','#d8eed9','#cfe8fc','#fad0de','#ffeac9','#ea
 
 // Build the legend explaining badge/line colours & styles (mirrors the render code).
 function buildLegend() {
-  // Truth: solid centre line. Link: hollow "tube" — two coloured edges with a transparent gap,
-  // the gap widening row → col → box to mirror the nesting used on the grid.
+  // Mirrors the render code exactly. Truth line: 3.5px solid @ 0.7. Truth cell: filled square
+  // (fill 0.7) with a 1px border. Link tube: a faint (0.05) fill band with a 1px coloured edge
+  // (@ 0.7) either side, half-width 2 for row/col and 4 for box (so a box nests outside a line).
+  // Link cell: 1px-bordered square (@ 0.7) with a 10% fill. All squares round to rx 4.
   const line = (color) =>
     `<svg width="30" height="18" style="flex-shrink:0"><line x1="1" y1="9" x2="29" y2="9" ` +
     `stroke="${color}" stroke-width="3.5" opacity="0.7"/></svg>`;
-  const tube = (color, gap) =>
+  const tube = (color, half) =>
     `<svg width="30" height="18" style="flex-shrink:0">` +
-    `<rect x="1" y="${9 - gap}" width="28" height="${2 * gap}" fill="${color}" opacity="0.1"/>` +
-    `<line x1="1" y1="${9 - gap}" x2="29" y2="${9 - gap}" stroke="${color}" stroke-width="1" opacity="0.9"/>` +
-    `<line x1="1" y1="${9 + gap}" x2="29" y2="${9 + gap}" stroke="${color}" stroke-width="1" opacity="0.9"/></svg>`;
-  const sqTruth = (color) => `<span class="lg-sq" style="background:${color};opacity:0.7"></span>`;
-  const sqLink  = (color) => `<span class="lg-sq" style="border:2px solid ${color};background:${color}1a;opacity:0.85"></span>`;
+    `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="0.05"/>` +
+    `<line x1="1" y1="${9 - half}" x2="29" y2="${9 - half}" stroke="${color}" stroke-width="1" opacity="0.7"/>` +
+    `<line x1="1" y1="${9 + half}" x2="29" y2="${9 + half}" stroke="${color}" stroke-width="1" opacity="0.7"/></svg>`;
+  const sqTruth = (color) => `<span class="lg-sq" style="background:${color};border:1px solid ${color};border-radius:4px;opacity:0.7"></span>`;
+  const sqLink  = (color) => `<span class="lg-sq" style="background:${color}1a;border:1px solid ${color}b3;border-radius:4px"></span>`;
   const badge = (bg, ring) =>
     `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:0 0 0 2px ${ring}` : ''}"></span>`;
   const ROW = '#a020f0', COL = '#00702f', BOX = '#c05800', CELL = TRUTH_COLOR;
   document.getElementById('legend').innerHTML = `
     <div class="legend-section">
       <div class="legend-title">Candidates</div>
-      <div class="legend-row">${badge(TRUTH_COLOR)} Truth (≥1 true)</div>
-      <div class="legend-row">${badge('#ff0000')} Eliminated</div>
-      <div class="legend-row">${badge('#ff0000', TRUTH_COLOR)} Elim. that was a truth</div>
+      <div class="legend-row">${badge(TRUTH_COLOR)} Candidate</div>
+      <div class="legend-row">${badge('#ff0000')} Elimination</div>
+      <div class="legend-row">${badge('#ff0000', TRUTH_COLOR)} Elim. in a truth</div>
     </div>
     <div class="legend-section">
       <div class="legend-title">Truths — solid</div>
@@ -695,9 +714,9 @@ function buildLegend() {
     </div>
     <div class="legend-section">
       <div class="legend-title">Links — bordered</div>
-      <div class="legend-row">${tube(ROW, 1.5)} Row</div>
-      <div class="legend-row">${tube(COL, 1.5)} Column</div>
-      <div class="legend-row">${tube(BOX, 3.5)} Box</div>
+      <div class="legend-row">${tube(ROW, 2)} Row</div>
+      <div class="legend-row">${tube(COL, 2)} Column</div>
+      <div class="legend-row">${tube(BOX, 4)} Box</div>
       <div class="legend-row">${sqLink(CELL)} Cell</div>
     </div>`;
 }
@@ -1074,35 +1093,16 @@ function _checkMoveImpl() {
   // ones (e.g. a column through just one cell of a hidden pair, when a box already covers more).
   const linkingCovers = potCovers.filter(c => c.keys.some(k => elimSet.has(k)));
 
-  // Build the link list for display: the minimal covering plus all truth→elim linking covers,
-  // keeping only those touching ≥2 relevant candidates (truths/eliminations) so a lone-truth
-  // wrapper, which links nothing, is dropped.
+  // Build the link list for display: the minimal covering plus every truth→elim linking cover.
+  // Keep any cover touching ≥2 relevant candidates (truths/eliminations) — i.e. every link that
+  // actually reaches an elimination — and drop only lone-truth wrappers that link nothing. (No
+  // redundancy/domination pruning: overlapping alternative explanations are all shown.)
   const isRelevant = k => baseKeySet.has(k) || elimSet.has(k);
-  const coverKind  = c => c.type === 'cell' ? 'cell' : c.unit < 9 ? 'row' : c.unit < 18 ? 'col' : 'box';
-  // When the same candidates can be linked by more than one unit, prefer the most specific
-  // geometry: a box is tighter than a row/column line. e.g. two cells that share a column but
-  // also sit in one box get a box link, not a column link laid over it.
-  const coverPrio  = c => ({ box: 3, col: 2, row: 1, cell: 4 }[coverKind(c)]);
-
   const relCount = c => c.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0);
   const toLinks = coverSet => {
     const all = new Set(coverSet);
     for (const c of linkingCovers) all.add(c);
-    const list = [...all].filter(c => relCount(c) >= 2);
-    // Drop any cover that is REDUNDANT: every relevant candidate it touches (truths + touched
-    // eliminations) is also covered by the union of the OTHER retained covers, so it adds no
-    // unique explanation. This removes "bridge" covers — e.g. a box that merely relays one
-    // column's eliminations to a truth its own column already covers — which a one-cover-at-a-time
-    // domination test misses when it takes two covers together to subsume the box. Covers are
-    // considered smallest-first (ties: cell < row < col < box, so a box is kept over a line when
-    // two are mutually redundant); any cover that uniquely explains a candidate is always kept.
-    const retained = new Set(list);
-    const order = [...list].sort((a, b) => relCount(a) - relCount(b) || coverPrio(a) - coverPrio(b));
-    for (const c of order) {
-      const rel = c.keys.filter(isRelevant);
-      if (rel.every(k => [...retained].some(d => d !== c && d.keySet.has(k)))) retained.delete(c);
-    }
-    return list.filter(c => retained.has(c)).map(coverToLink);
+    return [...all].filter(c => relCount(c) >= 2).map(coverToLink);
   };
 
   if (allElims.length > 0) {
@@ -1563,6 +1563,19 @@ function buildGridStructure() {
     cellEls[i] = cell;
   }
 
+  // Dark box separators over the light background: two vertical + two horizontal, in the wide
+  // gap tracks (6, 12) at the box boundaries. Thin 1px gaps keep the light background.
+  for (const t of [6, 12]) {
+    const v = document.createElement('div');
+    v.className = 'box-line';
+    v.style.gridColumn = String(t); v.style.gridRow = '1 / -1';
+    gridEl.appendChild(v);
+    const h = document.createElement('div');
+    h.className = 'box-line';
+    h.style.gridRow = String(t); h.style.gridColumn = '1 / -1';
+    gridEl.appendChild(h);
+  }
+
   gridBuilt = true;
 }
 
@@ -1907,7 +1920,7 @@ function renderTruthSVG() {
   // middle of any tube it stacks with, with the tube's coloured edges either side.
   for (const truth of userTruths) if (truth.isCellTruth) renderSet(truth, false);
   if (showLinks)
-    for (const link of ((lastCheck && lastCheck.covers) || [])) renderSet(link, true);
+    for (const link of ((lastCheck && lastCheck.covers) || [])) if (!link.hidden) renderSet(link, true);
   for (const truth of userTruths) if (!truth.isCellTruth) renderSet(truth, false);
 }
 
@@ -1987,14 +2000,34 @@ function renderTruthPanel() {
   const linkList  = document.getElementById('link-list');
   linkList.innerHTML = '';
   linkPanel.style.display = links.length ? 'block' : 'none';
-  links.forEach(link => {
+  links.forEach((link, i) => {
     const item = document.createElement('div');
-    item.className = 'truth-item';
+    item.className = 'truth-item' + (link.hidden ? ' link-off' : '');
     item.innerHTML =
       `<span class="link-swatch" style="border:2px dashed ${link.color}"></span>` +
-      `<span class="truth-label">${link.label}</span>`;
+      `<span class="truth-label">${link.label}</span>` +
+      `<button class="link-toggle" title="${link.hidden ? 'Show this link' : 'Hide this link'}" ` +
+      `onclick="toggleLinkVis(${i})">${eyeIcon(link.hidden)}</button>`;
     linkList.appendChild(item);
   });
+}
+
+// Small feather-style eye / eye-off icon for the per-link visibility toggle.
+function eyeIcon(off) {
+  const attrs = 'width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  return off
+    ? `<svg ${attrs}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
+    : `<svg ${attrs}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+}
+
+// Toggle one link's visibility on the grid (for de-cluttering before a screenshot). The flag
+// lives on the cover object, so a fresh Check Move resets everything to visible.
+function toggleLinkVis(i) {
+  const covers = lastCheck && lastCheck.covers;
+  if (!covers || !covers[i]) return;
+  covers[i].hidden = !covers[i].hidden;
+  renderTruthSVG();
+  renderTruthPanel();
 }
 
 // ── Status ─────────────────────────────────────────────────────────────────
