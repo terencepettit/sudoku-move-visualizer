@@ -1809,25 +1809,133 @@ function renderTruthSVG() {
     // drawn in pieces with a gap, so the joining tube's hollow flows through the wall.
     const drawEdge = sgn => {
       const e = offset(sgn);
-      if (n === 2 && cuts && cuts.length) {
-        const vert = Math.abs(e[0][0] - e[1][0]) < 0.5, fixed = vert ? e[0][0] : e[0][1];
+      if (!cuts || !cuts.length) { stroke(roundedPath(e, LINK_CORNER_R), 1, EDGE_OP); return; }
+      // Walk the offset polyline; where a straight segment carries a T-junction cut, break the edge
+      // so the joining tube's hollow flows through the gap. Cuts land in a segment's interior (docks
+      // sit a half-width off corners), so uncut corners keep flowing into the next sub-polyline and
+      // stay rounded.
+      const subs = [];
+      let cur = [e[0]];
+      for (let i = 0; i < e.length - 1; i++) {
+        const A = e[i], B = e[i + 1];
+        const vert = Math.abs(A[0] - B[0]) < 0.5, fixed = vert ? A[0] : A[1];
         const gaps = cuts.filter(c => c.vert === vert && Math.abs(c.fixed - fixed) < 0.6);
-        if (gaps.length) {
-          const a0 = vert ? e[0][1] : e[0][0], a1 = vert ? e[1][1] : e[1][0];
-          let ivs = [[Math.min(a0, a1), Math.max(a0, a1)]];
-          for (const c of gaps) {
-            const nx = [];
-            for (const [s, t] of ivs) { if (c.hi <= s || c.lo >= t) nx.push([s, t]); else { if (c.lo > s) nx.push([s, c.lo]); if (c.hi < t) nx.push([c.hi, t]); } }
-            ivs = nx;
-          }
-          for (const [s, t] of ivs) if (t - s > 0.5)
-            stroke(vert ? `M ${fixed} ${s} L ${fixed} ${t}` : `M ${s} ${fixed} L ${t} ${fixed}`, 1, EDGE_OP);
-          return;
+        if (!gaps.length) { cur.push(B); continue; }
+        const a0 = vert ? A[1] : A[0], a1 = vert ? B[1] : B[0], dir = a1 >= a0 ? 1 : -1;
+        const ptAt = v => vert ? [fixed, v] : [v, fixed];
+        let ivs = [[Math.min(a0, a1), Math.max(a0, a1)]];
+        for (const c of gaps) {
+          const nx = [];
+          for (const [s, t] of ivs) { if (c.hi <= s || c.lo >= t) nx.push([s, t]); else { if (c.lo > s) nx.push([s, c.lo]); if (c.hi < t) nx.push([c.hi, t]); } }
+          ivs = nx;
+        }
+        ivs = ivs.filter(([s, t]) => t - s > 0.5).sort((x, y) => dir > 0 ? x[0] - y[0] : y[0] - x[0]);
+        for (let j = 0; j < ivs.length; j++) {
+          const s = dir > 0 ? ivs[j][0] : ivs[j][1], t = dir > 0 ? ivs[j][1] : ivs[j][0];
+          if (j === 0 && Math.abs(s - a0) < 0.5) cur.push(ptAt(t));
+          else { if (cur.length >= 2) subs.push(cur); cur = [ptAt(s), ptAt(t)]; }
         }
       }
-      stroke(roundedPath(e, LINK_CORNER_R), 1, EDGE_OP);
+      if (cur.length >= 2) subs.push(cur);
+      for (const sub of subs) stroke(roundedPath(sub, LINK_CORNER_R), 1, EDGE_OP);
     };
     drawEdge(1); drawEdge(-1);
+  }
+
+  // Turn a link's raw routes into clean tubes: decompose to axis-aligned segments, MERGE collinear
+  // runs (so an L-route arm and a collinear stub become one straight bar), chain remaining corners
+  // into rounded polylines, and where a stub meets another tube's side draw a flowing T-junction
+  // (dock at the near wall + cut a gap in it).
+  function renderLinkTubes(routes, color, W) {
+    const near = (a, b) => Math.abs(a - b) < 0.6;
+    const raw = [];
+    for (const rt of routes) {
+      const P = rt.pts; if (!P || !P[0] || !P[P.length - 1]) continue;
+      if (P.length === 2) raw.push({ a: P[0].slice(), b: P[1].slice(), ba: rt.ts, bb: rt.te });
+      else { raw.push({ a: P[0].slice(), b: P[1].slice(), ba: rt.ts, bb: false });
+             raw.push({ a: P[1].slice(), b: P[2].slice(), ba: false, bb: rt.te }); }
+    }
+    // Merge collinear segments (same line, touching/overlapping ranges); the extreme badges survive.
+    const groups = new Map();
+    for (const s of raw) {
+      const horiz = near(s.a[1], s.b[1]);
+      const k = horiz ? 'h' + Math.round(s.a[1]) : 'v' + Math.round(s.a[0]);
+      (groups.get(k) || groups.set(k, []).get(k)).push(s);
+    }
+    const merged = [];
+    const mkSeg = (iv, horiz, fixed) => horiz
+      ? { a: [iv.lo, fixed], b: [iv.hi, fixed], ba: iv.loB, bb: iv.hiB, horiz: true }
+      : { a: [fixed, iv.lo], b: [fixed, iv.hi], ba: iv.loB, bb: iv.hiB, horiz: false };
+    for (const [k, g] of groups) {
+      const horiz = k[0] === 'h', fixed = horiz ? g[0].a[1] : g[0].a[0];
+      const items = g.map(s => { const av = horiz ? s.a[0] : s.a[1], bv = horiz ? s.b[0] : s.b[1];
+        return av <= bv ? { lo: av, hi: bv, loB: s.ba, hiB: s.bb } : { lo: bv, hi: av, loB: s.bb, hiB: s.ba }; })
+        .sort((x, y) => x.lo - y.lo);
+      let cur = null;
+      for (const it of items) {
+        if (cur && it.lo <= cur.hi + 0.5) { if (it.hi > cur.hi) { cur.hi = it.hi; cur.hiB = it.hiB; } }
+        else { if (cur) merged.push(mkSeg(cur, horiz, fixed)); cur = { lo: it.lo, hi: it.hi, loB: it.loB, hiB: it.hiB }; }
+      }
+      if (cur) merged.push(mkSeg(cur, horiz, fixed));
+    }
+    // Node graph (shared endpoints) for chaining corners.
+    const nkey = p => Math.round(p[0]) + ',' + Math.round(p[1]);
+    const nodes = new Map();
+    for (const s of merged) for (const e of ['a', 'b']) { const kk = nkey(s[e]); (nodes.get(kk) || nodes.set(kk, []).get(kk)).push({ s, e }); }
+    const onInt = (p, s) => s.horiz
+      ? (near(p[1], s.a[1]) && p[0] > Math.min(s.a[0], s.b[0]) + 0.5 && p[0] < Math.max(s.a[0], s.b[0]) - 0.5)
+      : (near(p[0], s.a[0]) && p[1] > Math.min(s.a[1], s.b[1]) + 0.5 && p[1] < Math.max(s.a[1], s.b[1]) - 0.5);
+    // Chain segments through degree-2 shared corner nodes into rounded polylines.
+    const used = new Set(), polys = [];
+    for (const s0 of merged) {
+      if (used.has(s0)) continue;
+      used.add(s0);
+      const pts = [s0.a.slice(), s0.b.slice()];
+      const ends = [{ badge: s0.ba }, { badge: s0.bb }];
+      const walk = (fromP, seg, prepend) => {
+        let p = fromP, cs = seg;
+        while (true) {
+          const nd = nodes.get(nkey(p));
+          if (!nd || nd.length !== 2) break;
+          const nx = nd.find(x => x.s !== cs);
+          if (!nx || used.has(nx.s)) break;
+          used.add(nx.s);
+          const far = (nx.e === 'a' ? nx.s.b : nx.s.a), farB = (nx.e === 'a' ? nx.s.bb : nx.s.ba);
+          if (prepend) { pts.unshift(far.slice()); ends[0] = { badge: farB }; }
+          else { pts.push(far.slice()); ends[1] = { badge: farB }; }
+          cs = nx.s; p = far;
+        }
+      };
+      walk(s0.a, s0, true); walk(s0.b, s0, false);
+      polys.push({ pts, ends });
+    }
+    // T-junctions: a non-badge terminal endpoint lying on another polyline's interior → dock at the
+    // near wall and cut a gap in it so the two hollows flow together.
+    for (const poly of polys) {
+      for (let side = 0; side < 2; side++) {
+        if (poly.ends[side].badge) continue;
+        const endPt = side === 0 ? poly.pts[0] : poly.pts[poly.pts.length - 1];
+        const innerPt = side === 0 ? poly.pts[1] : poly.pts[poly.pts.length - 2];
+        let target = null;
+        for (const t of polys) {
+          if (t === poly) continue;
+          for (let i = 0; i < t.pts.length - 1; i++) {
+            const seg = { a: t.pts[i], b: t.pts[i + 1], horiz: near(t.pts[i][1], t.pts[i + 1][1]) };
+            if (onInt(endPt, seg)) { target = { poly: t, seg }; break; }
+          }
+          if (target) break;
+        }
+        if (!target) continue;
+        const s = target.seg;
+        if (s.horiz) endPt[1] += Math.sign(innerPt[1] - endPt[1]) * W;
+        else         endPt[0] += Math.sign(innerPt[0] - endPt[0]) * W;
+        (target.poly.cuts || (target.poly.cuts = [])).push(s.horiz
+          ? { vert: false, fixed: endPt[1], lo: endPt[0] - W, hi: endPt[0] + W }
+          : { vert: true,  fixed: endPt[0], lo: endPt[1] - W, hi: endPt[1] + W });
+      }
+    }
+    for (const poly of polys)
+      drawTube(poly.pts, color, W, poly.ends[0].badge, poly.ends[1].badge, poly.cuts || null);
   }
 
   // Render one set (truth or link). Truths draw as a solid line / filled square; links draw as
@@ -1894,11 +2002,13 @@ function renderTruthSVG() {
       // running an arm back along an existing line, which doubles that line). Each seg records its
       // fixed pixel coordinate (y for a horizontal seg, x for a vertical one), sourced from a
       // present endpoint, so an absent foot cell never needs its own (hidden) candidate looked up.
+      // segs (grid) drive drop-target search; routes (pixel) are handed to renderLinkTubes, which
+      // merges collinear runs and draws clean tubes + flowing T-junctions.
       const segs = [], routes = [];
-      const addSeg = (r1, c1, r2, c2, pt, route) => segs.push({
+      const addSeg = (r1, c1, r2, c2, pt) => segs.push({
         horiz: r1 === r2, vert: c1 === c2,
         rlo: Math.min(r1, r2), rhi: Math.max(r1, r2), clo: Math.min(c1, c2), chi: Math.max(c1, c2),
-        pix: r1 === r2 ? pt[1] : pt[0], route });
+        pix: r1 === r2 ? pt[1] : pt[0] });
       // Route between two present candidate cells: straight, or L-routed (corner in pixel space).
       const routeCells = (r1, c1, r2, c2) => {
         const p1 = ptOf(r1, c1), p2 = ptOf(r2, c2);
@@ -1907,14 +2017,11 @@ function renderTruthSVG() {
           const topP = r1 <= r2 ? p1 : p2, botP = r1 <= r2 ? p2 : p1;
           const [tr, tc] = r1 <= r2 ? [r1, c1] : [r2, c2];
           const [br, bc] = r1 <= r2 ? [r2, c2] : [r1, c1];
-          const corner = [botP[0], topP[1]];
-          const rt = { pts: [botP, corner, topP], ts: true, te: true };
-          routes.push(rt);
-          addSeg(br, bc, tr, bc, botP, rt); addSeg(tr, bc, tr, tc, topP, rt);
+          routes.push({ pts: [botP, [botP[0], topP[1]], topP], ts: true, te: true });
+          addSeg(br, bc, tr, bc, botP); addSeg(tr, bc, tr, tc, topP);
         } else {
-          const rt = { pts: [p1, p2], ts: true, te: true };
-          routes.push(rt);
-          addSeg(r1, c1, r2, c2, p1, rt);
+          routes.push({ pts: [p1, p2], ts: true, te: true });
+          addSeg(r1, c1, r2, c2, p1);
         }
       };
       const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
@@ -1937,7 +2044,7 @@ function renderTruthSVG() {
         }
         if (bi < 0) break;
         const e = remaining.splice(bi, 1)[0], er = Math.floor(e / 9), ec = e % 9;
-        // Shortest perpendicular drop onto an existing segment (its foot shares the elim's row/col).
+        // Shortest perpendicular drop onto an existing segment (foot shares the elim's row/col).
         let dropDist = Infinity, footR = -1, footC = -1, footSeg = null;
         for (const s of segs) {
           if (s.horiz && ec >= s.clo && ec <= s.chi) { const d = Math.abs(er - s.rlo); if (d > 0 && d < dropDist) { dropDist = d; footR = s.rlo; footC = ec; footSeg = s; } }
@@ -1945,31 +2052,17 @@ function renderTruthSVG() {
         }
         const elimPt = ptOf(er, ec);
         if (elimPt && footSeg && dropDist <= bnd) {
+          // Stub runs to the target's centre-line; renderLinkTubes docks + cuts the wall for the T.
           const footPix = footSeg.horiz ? [elimPt[0], footSeg.pix] : [footSeg.pix, elimPt[1]];
           const footBadge = truthKeySet.has(candKey(footR * 9 + footC, digit)) || elimKeySet.has(candKey(footR * 9 + footC, digit));
-          if (!footBadge) {
-            // Onto a tube (bare junction): dock at the tube's NEAR edge (centre ± half-width) and
-            // cut a gap in that wall over the stub's width, so the two hollow interiors flow into
-            // each other rather than the stub poking to the centre-line.
-            if (footSeg.horiz) footPix[1] += Math.sign(elimPt[1] - footPix[1]) * tubeW;
-            else               footPix[0] += Math.sign(elimPt[0] - footPix[0]) * tubeW;
-            const tRt = footSeg.route;
-            if (tRt && tRt.pts.length === 2) {
-              const targVert = Math.abs(tRt.pts[0][0] - tRt.pts[1][0]) < 0.5;
-              (tRt.cuts || (tRt.cuts = [])).push(targVert
-                ? { vert: true,  fixed: footPix[0], lo: footPix[1] - tubeW, hi: footPix[1] + tubeW }
-                : { vert: false, fixed: footPix[1], lo: footPix[0] - tubeW, hi: footPix[0] + tubeW });
-            }
-          }
-          const stubRt = { pts: [elimPt, footPix], ts: true, te: footBadge };
-          routes.push(stubRt);
-          addSeg(er, ec, footR, footC, elimPt, stubRt);
+          routes.push({ pts: [elimPt, footPix], ts: true, te: footBadge });
+          addSeg(er, ec, footR, footC, elimPt);
         } else {
           routeCells(er, ec, Math.floor(bnode / 9), bnode % 9);
         }
         connected.push(e);
       }
-      for (const rt of routes) if (rt.pts[0] && rt.pts[1]) drawTube(rt.pts, color, tubeW, rt.ts, rt.te, rt.cuts);
+      renderLinkTubes(routes, color, tubeW);
     }
   }
 
