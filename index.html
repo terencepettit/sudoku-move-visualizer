@@ -380,6 +380,8 @@ body.highlight-mode .cell { cursor: pointer; }
     placeholder="81-digit string (0=empty)"
     value="000000094760910050090002081070050010000709000080030067240100070010090045900000100">
   <button onclick="loadPuzzle()">Load</button>
+  <button onclick="copyState()"
+    title="Copy the full current state (givens, solved cells, candidates) to the clipboard — paste it back into this box and Load to restore">Copy State</button>
   <button onclick="skipBasics()"
     title="Auto-apply the basic techniques (naked/hidden singles, locked candidates, naked/hidden subsets)">Auto-fill Basics</button>
   <span class="sep">|</span>
@@ -467,6 +469,8 @@ const TRUTH_COLOR = '#1a7fff';
 const LINK_TUBE_HALF = { row: 2, col: 2, box: 4 };
 // Corner radius for box link/truth elbows, matching the cell-square rx (rounded look).
 const LINK_CORNER_R = 4;
+// Row/column LINKS render grey (truths keep their per-type colour; box links stay brown).
+const LINK_LINE_GRAY = '#757575';
 
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
@@ -685,9 +689,9 @@ function buildLegend() {
   // (fill 0.7) with a 1px border. Link tube: a faint (0.05) fill band with a 1px coloured edge
   // (@ 0.7) either side, half-width 2 for row/col and 4 for box (so a box nests outside a line).
   // Link cell: 1px-bordered square (@ 0.7) with a 10% fill. All squares round to rx 4.
-  const line = (color) =>
+  const line = (color, w = 3.5) =>
     `<svg width="30" height="18" style="flex-shrink:0"><line x1="1" y1="9" x2="29" y2="9" ` +
-    `stroke="${color}" stroke-width="3.5" opacity="0.7"/></svg>`;
+    `stroke="${color}" stroke-width="${w}" opacity="0.7"/></svg>`;
   const tube = (color, half) =>
     `<svg width="30" height="18" style="flex-shrink:0">` +
     `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="0.05"/>` +
@@ -709,13 +713,13 @@ function buildLegend() {
       <div class="legend-title">Truths — solid</div>
       <div class="legend-row">${line(ROW)} Row</div>
       <div class="legend-row">${line(COL)} Column</div>
-      <div class="legend-row">${line(BOX)} Box</div>
+      <div class="legend-row">${line(BOX, 5.5)} Box</div>
       <div class="legend-row">${sqTruth(CELL)} Cell</div>
     </div>
     <div class="legend-section">
       <div class="legend-title">Links — bordered</div>
-      <div class="legend-row">${tube(ROW, 2)} Row</div>
-      <div class="legend-row">${tube(COL, 2)} Column</div>
+      <div class="legend-row">${tube(LINK_LINE_GRAY, 2)} Row</div>
+      <div class="legend-row">${tube(LINK_LINE_GRAY, 2)} Column</div>
       <div class="legend-row">${tube(BOX, 4)} Box</div>
       <div class="legend-row">${sqLink(CELL)} Cell</div>
     </div>`;
@@ -1095,14 +1099,26 @@ function _checkMoveImpl() {
 
   // Build the link list for display: the minimal covering plus every truth→elim linking cover.
   // Keep any cover touching ≥2 relevant candidates (truths/eliminations) — i.e. every link that
-  // actually reaches an elimination — and drop only lone-truth wrappers that link nothing. (No
-  // redundancy/domination pruning: overlapping alternative explanations are all shown.)
+  // actually reaches an elimination — and drop only lone-truth wrappers that link nothing.
   const isRelevant = k => baseKeySet.has(k) || elimSet.has(k);
   const relCount = c => c.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0);
+  const boxUnitOf = cell => 18 + Math.floor(cellRow(cell) / 3) * 3 + Math.floor(cellCol(cell) / 3);
   const toLinks = coverSet => {
     const all = new Set(coverSet);
     for (const c of linkingCovers) all.add(c);
-    return [...all].filter(c => relCount(c) >= 2).map(coverToLink);
+    const list = [...all].filter(c => relCount(c) >= 2);
+    // A row/column link whose linked candidates (the truths + eliminations it actually connects)
+    // all lie in a single box is redundant with that box's link — drop it and show only the box
+    // link (when the box link, covering those same candidates, is also present).
+    return list.filter(c => {
+      if (c.type === 'cell' || c.unit >= 18) return true;        // cell / box links: keep
+      const rel = c.keys.filter(isRelevant);
+      const boxes = new Set(rel.map(k => boxUnitOf(keyCell(k))));
+      if (boxes.size !== 1) return true;                          // linked candidates span >1 box: keep
+      const boxUnit = [...boxes][0];
+      const boxLinkPresent = list.some(b => b !== c && b.unit === boxUnit && rel.every(k => b.keySet.has(k)));
+      return !boxLinkPresent;
+    }).map(coverToLink);
   };
 
   if (allElims.length > 0) {
@@ -1160,7 +1176,8 @@ function coverToLink(cover) {
   }
   const link = { isCellTruth: false, unit: cover.unit, digit: cover.digit,
                  keys: cover.keys, keySet: cover.keySet, sig: cover.sig, label: cover.label };
-  link.color = truthTypeColor(link);
+  // Row/column links render grey; box links keep the per-type (brown) colour.
+  link.color = cover.unit < 18 ? LINK_LINE_GRAY : truthTypeColor(link);
   return link;
 }
 
@@ -1727,7 +1744,7 @@ function renderTruthSVG() {
   // free ends (at digit badges) are trimmed back by GAP; interior corners are kept
   // exact and joined with a miter so the bend is filled cleanly (no cap notch).
   // GAP is just under the badge half-width (17px badge → 8.5px) so lines meet the edge.
-  function drawPolyline(pts, color, dashed) {
+  function drawPolyline(pts, color, dashed, width = 3.5) {
     const GAP = 8;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
@@ -1742,7 +1759,7 @@ function renderTruthSVG() {
     path.setAttribute('d', roundedPath(p, LINK_CORNER_R));   // rounded elbows (matches cell-square rx)
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', color);
-    path.setAttribute('stroke-width', dashed ? '2.5' : '3.5');
+    path.setAttribute('stroke-width', dashed ? '2.5' : String(width));
     path.setAttribute('stroke-linecap', dashed ? 'round' : 'butt');
     path.setAttribute('stroke-linejoin', 'round');
     if (dashed) path.setAttribute('stroke-dasharray', '0.1,5');
@@ -1751,18 +1768,19 @@ function renderTruthSVG() {
 
   // Draw a link as a tube: a faint (10%) coloured interior band with a 1px coloured edge on each
   // side, half-width W. The near-transparent centre lets anything it stacks over (a truth line, a
-  // narrower link) show through. Badge ends trim back by GAP; interior L-corners extend by W so the
-  // two arms meet. Segments are axis-aligned (links route straight or L-shaped).
-  function drawTube(pts, color, W) {
+  // narrower link) show through. Badge ends trim back by GAP; a T-junction end (trimStart/trimEnd
+  // false) is kept so the tube reaches the line it joins. Segments are axis-aligned.
+  function drawTube(pts, color, W, trimStart = true, trimEnd = true, cuts = null) {
     const GAP = 8, FILL_OP = 0.05, EDGE_OP = 0.7;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
-    // Trim the two badge ends inward by GAP along their segment direction.
+    // Trim a badge end inward by GAP along its segment direction (skipped for T-junction ends).
     const trim = (from, to) => {
       const dx = p[to][0] - p[from][0], dy = p[to][1] - p[from][1], len = Math.hypot(dx, dy);
       if (len > GAP) { p[from][0] += dx / len * GAP; p[from][1] += dy / len * GAP; }
     };
-    trim(0, 1); trim(n - 1, n - 2);
+    if (trimStart) trim(0, 1);
+    if (trimEnd)   trim(n - 1, n - 2);
     // Left-perpendicular unit of each segment (rotate direction 90°: (dx,dy) → (-dy,dx)).
     const perp = [];
     for (let i = 0; i < n - 1; i++) {
@@ -1785,11 +1803,31 @@ function renderTruthSVG() {
       el.setAttribute('opacity', op); el.setAttribute('stroke-linejoin', 'round');
       lineTarget.appendChild(el);
     };
-    // Fill band: thick centre stroke; round join gives the outer corner a radius of W. Edges:
-    // rounded-corner outline paths (radius LINK_CORNER_R, matching the cell squares).
+    // Fill band: thick centre stroke; round join gives the outer corner a radius of W.
     stroke(roundedPath(p, 0), 2 * W, FILL_OP);
-    stroke(roundedPath(offset(1), LINK_CORNER_R), 1, EDGE_OP);
-    stroke(roundedPath(offset(-1), LINK_CORNER_R), 1, EDGE_OP);
+    // Edges: rounded outline paths — but a straight edge carrying a cut (a T-junction opening) is
+    // drawn in pieces with a gap, so the joining tube's hollow flows through the wall.
+    const drawEdge = sgn => {
+      const e = offset(sgn);
+      if (n === 2 && cuts && cuts.length) {
+        const vert = Math.abs(e[0][0] - e[1][0]) < 0.5, fixed = vert ? e[0][0] : e[0][1];
+        const gaps = cuts.filter(c => c.vert === vert && Math.abs(c.fixed - fixed) < 0.6);
+        if (gaps.length) {
+          const a0 = vert ? e[0][1] : e[0][0], a1 = vert ? e[1][1] : e[1][0];
+          let ivs = [[Math.min(a0, a1), Math.max(a0, a1)]];
+          for (const c of gaps) {
+            const nx = [];
+            for (const [s, t] of ivs) { if (c.hi <= s || c.lo >= t) nx.push([s, t]); else { if (c.lo > s) nx.push([s, c.lo]); if (c.hi < t) nx.push([c.hi, t]); } }
+            ivs = nx;
+          }
+          for (const [s, t] of ivs) if (t - s > 0.5)
+            stroke(vert ? `M ${fixed} ${s} L ${fixed} ${t}` : `M ${s} ${fixed} L ${t} ${fixed}`, 1, EDGE_OP);
+          return;
+        }
+      }
+      stroke(roundedPath(e, LINK_CORNER_R), 1, EDGE_OP);
+    };
+    drawEdge(1); drawEdge(-1);
   }
 
   // Render one set (truth or link). Truths draw as a solid line / filled square; links draw as
@@ -1822,106 +1860,127 @@ function renderTruthSVG() {
     } else {
       const digit = keyDigit(set.keys[0]);
       const tubeW = dashed ? LINK_TUBE_HALF[set.unit < 9 ? 'row' : set.unit < 18 ? 'col' : 'box'] : 0;
+      const ptOf = (r, c) => candCenter(candKey(r * 9 + c, digit)) || ghostCandCenter(r * 9 + c, digit);
 
-      // Draw a connector between two candidate keys (L-routed for diagonals). Truths draw a
-      // solid centre line; links draw a hollow tube of half-width tubeW.
-      const connect = (k1, k2) => {
-        const c1 = keyCell(k1), c2 = keyCell(k2);
-        const row1 = Math.floor(c1 / 9), col1 = c1 % 9;
-        const row2 = Math.floor(c2 / 9), col2 = c2 % 9;
-        const p1 = candCenter(k1) || ghostCandCenter(c1, digit);
-        const p2 = candCenter(k2) || ghostCandCenter(c2, digit);
-        if (!p1 || !p2) return;
-        let pts;
-        if (row1 !== row2 && col1 !== col2) {
-          // Diagonal → route L-shaped (corner at bottom.x / top.y, pixel-perfect).
-          const [topKey, botKey] = row1 <= row2 ? [k1, k2] : [k2, k1];
-          const topPt = candCenter(topKey) || ghostCandCenter(keyCell(topKey), digit);
-          const botPt = candCenter(botKey) || ghostCandCenter(keyCell(botKey), digit);
-          if (!topPt || !botPt) return;
-          pts = [botPt, [botPt[0], topPt[1]], topPt];
-        } else {
-          pts = [p1, p2];
-        }
-        if (dashed) drawTube(pts, color, tubeW);
-        else        drawPolyline(pts, color, false);
-      };
-
-      // Which segments to draw?
-      const pairs = [];
-      if (!dashed) {
-        // Truth: chain all of its candidates in sorted order.
-        const sorted = [...set.keys].sort((a, b) => keyCell(a) - keyCell(b));
-        for (let i = 0; i < sorted.length - 1; i++) pairs.push([sorted[i], sorted[i + 1]]);
-      } else {
-        // Link: chain the truth candidates it covers, then attach each eliminated candidate to
-        // the nearest node ALREADY in the tree (a truth, or an elimination already attached),
-        // growing outward. Pointing every elimination straight at a truth can make two L-routes
-        // overlap into a doubled (darker) line when one's corner passes through another's cell;
-        // growing a tree instead routes the far elimination through the near one. Non-eliminated
-        // candidates are ignored.
-        const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
-        const eKeys = set.keys.filter(k => elimKeySet.has(k) && !truthKeySet.has(k));
-        for (let i = 0; i < tKeys.length - 1; i++) pairs.push([tKeys[i], tKeys[i + 1]]);
-        const connected = tKeys.slice();
-        const remaining = eKeys.slice();
-        while (remaining.length && connected.length) {
-          let bi = -1, bt = null, bd = Infinity;
-          for (let i = 0; i < remaining.length; i++) {
-            const er = cellRow(keyCell(remaining[i])), ec = cellCol(keyCell(remaining[i]));
-            for (const c of connected) {
-              const d = Math.abs(cellRow(keyCell(c)) - er) + Math.abs(cellCol(keyCell(c)) - ec);
-              if (d < bd) { bd = d; bi = i; bt = c; }
-            }
-          }
-          if (bi < 0) break;
-          const e = remaining.splice(bi, 1)[0];
-          pairs.push([e, bt]);
-          connected.push(e);
-        }
-      }
-      if (!pairs.length) return;
-
-      // Drop any segment that is collinear with and fully contained in a longer one, so
-      // e.g. two eliminations spoking to the same truth along a row don't draw two
-      // overlapping (doubled) dotted lines — the longer segment already passes over both.
-      const span = ([a, b]) => {
-        const ra = cellRow(keyCell(a)), ca = cellCol(keyCell(a));
-        const rb = cellRow(keyCell(b)), cb = cellCol(keyCell(b));
-        return { horiz: ra === rb, vert: ca === cb, r: ra, c: ca,
-                 rlo: Math.min(ra, rb), rhi: Math.max(ra, rb),
-                 clo: Math.min(ca, cb), chi: Math.max(ca, cb),
-                 len: Math.abs(ra - rb) + Math.abs(ca - cb) };
-      };
-      const spans = pairs.map(span);
-      const drawn = pairs.filter((p, i) => {
-        const s = spans[i];
-        return !pairs.some((q, j) => {
-          if (j === i) return false;
-          const t = spans[j];
-          if (t.len <= s.len) return false;                 // only a strictly longer one absorbs
-          if (s.horiz && t.horiz && s.r === t.r) return t.clo <= s.clo && s.chi <= t.chi;
-          if (s.vert  && t.vert  && s.c === t.c) return t.rlo <= s.rlo && s.rhi <= t.rhi;
-          return false;
-        });
-      });
-
-      // Group the segments so their translucency composites once (see lineTarget).
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.setAttribute('opacity', dashed ? '1' : '0.7');
       svg.appendChild(group);
       lineTarget = group;
-      for (const [k1, k2] of drawn) connect(k1, k2);
+
+      if (!dashed) {
+        // Truth: chain candidates in sorted order, each as a straight / L-routed solid line.
+        // Box truths draw 2px wider than row/column truths.
+        const truthW = set.unit >= 18 ? 5.5 : 3.5;
+        const sorted = [...set.keys].sort((a, b) => keyCell(a) - keyCell(b));
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const c1 = keyCell(sorted[i]), c2 = keyCell(sorted[i + 1]);
+          const r1 = Math.floor(c1 / 9), l1 = c1 % 9, r2 = Math.floor(c2 / 9), l2 = c2 % 9;
+          const p1 = ptOf(r1, l1), p2 = ptOf(r2, l2);
+          if (!p1 || !p2) continue;
+          if (r1 !== r2 && l1 !== l2) {
+            const [tr, tl] = r1 <= r2 ? [r1, l1] : [r2, l2];
+            const [br, bl] = r1 <= r2 ? [r2, l2] : [r1, l1];
+            drawPolyline([ptOf(br, bl), [ptOf(br, bl)[0], ptOf(tr, tl)[1]], ptOf(tr, tl)], color, false, truthW);
+          } else {
+            drawPolyline([p1, p2], color, false, truthW);
+          }
+        }
+        return;
+      }
+
+      // Link: chain the truth candidates, then attach each eliminated candidate to the tree. Where
+      // an elimination lines up with an already-drawn segment, connect it by the shortest
+      // perpendicular drop and stop at a T-junction (rather than L-routing to a truth's centre and
+      // running an arm back along an existing line, which doubles that line). Each seg records its
+      // fixed pixel coordinate (y for a horizontal seg, x for a vertical one), sourced from a
+      // present endpoint, so an absent foot cell never needs its own (hidden) candidate looked up.
+      const segs = [], routes = [];
+      const addSeg = (r1, c1, r2, c2, pt, route) => segs.push({
+        horiz: r1 === r2, vert: c1 === c2,
+        rlo: Math.min(r1, r2), rhi: Math.max(r1, r2), clo: Math.min(c1, c2), chi: Math.max(c1, c2),
+        pix: r1 === r2 ? pt[1] : pt[0], route });
+      // Route between two present candidate cells: straight, or L-routed (corner in pixel space).
+      const routeCells = (r1, c1, r2, c2) => {
+        const p1 = ptOf(r1, c1), p2 = ptOf(r2, c2);
+        if (!p1 || !p2) return;
+        if (r1 !== r2 && c1 !== c2) {
+          const topP = r1 <= r2 ? p1 : p2, botP = r1 <= r2 ? p2 : p1;
+          const [tr, tc] = r1 <= r2 ? [r1, c1] : [r2, c2];
+          const [br, bc] = r1 <= r2 ? [r2, c2] : [r1, c1];
+          const corner = [botP[0], topP[1]];
+          const rt = { pts: [botP, corner, topP], ts: true, te: true };
+          routes.push(rt);
+          addSeg(br, bc, tr, bc, botP, rt); addSeg(tr, bc, tr, tc, topP, rt);
+        } else {
+          const rt = { pts: [p1, p2], ts: true, te: true };
+          routes.push(rt);
+          addSeg(r1, c1, r2, c2, p1, rt);
+        }
+      };
+      const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
+      const eKeys = set.keys.filter(k => elimKeySet.has(k) && !truthKeySet.has(k));
+      for (let i = 0; i < tKeys.length - 1; i++) {
+        const a = keyCell(tKeys[i]), b = keyCell(tKeys[i + 1]);
+        routeCells(Math.floor(a / 9), a % 9, Math.floor(b / 9), b % 9);
+      }
+      const connected = tKeys.map(keyCell);
+      const remaining = eKeys.map(keyCell);
+      while (remaining.length && connected.length) {
+        // Grow the tree by the elimination nearest (Manhattan) to any connected node.
+        let bi = -1, bnode = -1, bnd = Infinity;
+        for (let i = 0; i < remaining.length; i++) {
+          const er = Math.floor(remaining[i] / 9), ec = remaining[i] % 9;
+          for (const c of connected) {
+            const d = Math.abs(Math.floor(c / 9) - er) + Math.abs(c % 9 - ec);
+            if (d < bnd) { bnd = d; bi = i; bnode = c; }
+          }
+        }
+        if (bi < 0) break;
+        const e = remaining.splice(bi, 1)[0], er = Math.floor(e / 9), ec = e % 9;
+        // Shortest perpendicular drop onto an existing segment (its foot shares the elim's row/col).
+        let dropDist = Infinity, footR = -1, footC = -1, footSeg = null;
+        for (const s of segs) {
+          if (s.horiz && ec >= s.clo && ec <= s.chi) { const d = Math.abs(er - s.rlo); if (d > 0 && d < dropDist) { dropDist = d; footR = s.rlo; footC = ec; footSeg = s; } }
+          if (s.vert  && er >= s.rlo && er <= s.rhi) { const d = Math.abs(ec - s.clo); if (d > 0 && d < dropDist) { dropDist = d; footR = er; footC = s.clo; footSeg = s; } }
+        }
+        const elimPt = ptOf(er, ec);
+        if (elimPt && footSeg && dropDist <= bnd) {
+          const footPix = footSeg.horiz ? [elimPt[0], footSeg.pix] : [footSeg.pix, elimPt[1]];
+          const footBadge = truthKeySet.has(candKey(footR * 9 + footC, digit)) || elimKeySet.has(candKey(footR * 9 + footC, digit));
+          if (!footBadge) {
+            // Onto a tube (bare junction): dock at the tube's NEAR edge (centre ± half-width) and
+            // cut a gap in that wall over the stub's width, so the two hollow interiors flow into
+            // each other rather than the stub poking to the centre-line.
+            if (footSeg.horiz) footPix[1] += Math.sign(elimPt[1] - footPix[1]) * tubeW;
+            else               footPix[0] += Math.sign(elimPt[0] - footPix[0]) * tubeW;
+            const tRt = footSeg.route;
+            if (tRt && tRt.pts.length === 2) {
+              const targVert = Math.abs(tRt.pts[0][0] - tRt.pts[1][0]) < 0.5;
+              (tRt.cuts || (tRt.cuts = [])).push(targVert
+                ? { vert: true,  fixed: footPix[0], lo: footPix[1] - tubeW, hi: footPix[1] + tubeW }
+                : { vert: false, fixed: footPix[1], lo: footPix[0] - tubeW, hi: footPix[0] + tubeW });
+            }
+          }
+          const stubRt = { pts: [elimPt, footPix], ts: true, te: footBadge };
+          routes.push(stubRt);
+          addSeg(er, ec, footR, footC, elimPt, stubRt);
+        } else {
+          routeCells(er, ec, Math.floor(bnode / 9), bnode % 9);
+        }
+        connected.push(e);
+      }
+      for (const rt of routes) if (rt.pts[0] && rt.pts[1]) drawTube(rt.pts, color, tubeW, rt.ts, rt.te, rt.cuts);
     }
   }
 
-  // Draw order (bottom → top): cell truths (filled squares) sit behind everything; then links;
-  // then line truths (row/col/box) on top, so a truth's solid centre line sits in the hollow
-  // middle of any tube it stacks with, with the tube's coloured edges either side.
+  // Draw order (bottom → top): cell truths (filled squares) behind everything; then links; then
+  // BOX line truths; then row/column line truths on top (a truth's solid centre line sits in the
+  // hollow middle of any tube it stacks with, and box truths sit behind the thinner row/col ones).
   for (const truth of userTruths) if (truth.isCellTruth) renderSet(truth, false);
   if (showLinks)
     for (const link of ((lastCheck && lastCheck.covers) || [])) if (!link.hidden) renderSet(link, true);
-  for (const truth of userTruths) if (!truth.isCellTruth) renderSet(truth, false);
+  for (const truth of userTruths) if (!truth.isCellTruth && truth.unit >= 18) renderSet(truth, false);
+  for (const truth of userTruths) if (!truth.isCellTruth && truth.unit < 18) renderSet(truth, false);
 }
 
 // Toggle visibility of the auto-generated cover links on the grid.
@@ -2241,8 +2300,64 @@ function solvePuzzle(givens) {
   return solutions === 1 ? result : null;
 }
 
+// ── Save / restore full puzzle state ────────────────────────────────────────
+// Serialise given digits, solved cells and every cell's candidate set into one string that
+// round-trips through the input + Load. Format: 'SSv1' + digits(81) + solved-flags(81) +
+// candidate bitmasks (81 cells × 2 base-36 chars each).
+const STATE_LEN = 4 + 81 + 81 + 162;
+
+function serializeState() {
+  const digits = given.join('');
+  const solved = Array.from({ length: 81 }, (_, i) => (solvedCells.has(i) ? '1' : '0')).join('');
+  const cs = Array.from({ length: 81 }, (_, i) => {
+    let mask = 0;
+    for (const d of cands[i]) mask |= 1 << (d - 1);
+    return mask.toString(36).padStart(2, '0');
+  }).join('');
+  return 'SSv1' + digits + solved + cs;
+}
+
+async function copyState() {
+  const str = serializeState();
+  try {
+    await navigator.clipboard.writeText(str);
+    setStatus('Puzzle state copied to clipboard.', 'ok');
+  } catch (e) {
+    // Clipboard unavailable → drop it in the input so the user can copy it manually.
+    const inp = document.getElementById('puzzle-input');
+    inp.value = str; inp.focus(); inp.select();
+    setStatus('Couldn’t reach the clipboard — string placed in the box; press Ctrl/Cmd-C.', 'err');
+  }
+}
+
+// Load a state string produced by serializeState(). Returns false (and alerts) if malformed.
+function loadSavedState(str) {
+  if (str.length !== STATE_LEN) { alert('That doesn’t look like a saved-puzzle string.'); return false; }
+  const digits = str.slice(4, 85), solved = str.slice(85, 166), cs = str.slice(166);
+  if (!/^[0-9]{81}$/.test(digits) || !/^[01]{81}$/.test(solved)) { alert('Saved-puzzle string is corrupt.'); return false; }
+  given = Array.from(digits, c => +c);
+  solvedCells = new Set();
+  for (let i = 0; i < 81; i++) if (solved[i] === '1') solvedCells.add(i);
+  // Solution comes from the ORIGINAL givens (solved cells excluded), matching a fresh Load.
+  solution = solvePuzzle(given.map((d, i) => (solvedCells.has(i) ? 0 : d)));
+  cands = Array.from({ length: 81 }, () => new Set());
+  for (let i = 0; i < 81; i++) {
+    const mask = parseInt(cs.slice(i * 2, i * 2 + 2), 36) || 0;
+    for (let d = 1; d <= 9; d++) if (mask & (1 << (d - 1))) cands[i].add(d);
+  }
+  userTruths = []; lastCheck = null; selIdx = -1;
+  cellColors.fill(null);
+  undoStack = []; updateUndoButton();
+  buildGrid(); renderTruthSVG(); renderTruthPanel(); clearCheckResult();
+  history.replaceState(null, '', '#' + str);
+  setStatus('Saved puzzle loaded.', 'ok');
+  return true;
+}
+
 function loadPuzzle() {
-  const s = document.getElementById('puzzle-input').value.trim().replace(/\./g, '0');
+  const raw = document.getElementById('puzzle-input').value.trim();
+  if (/^SSv1/i.test(raw)) { loadSavedState(raw); return; }
+  const s = raw.replace(/\./g, '0');
   if (!/^[0-9]{81}$/.test(s)) {
     alert('Enter exactly 81 digits (0 for empty cells).');
     return;
@@ -2271,7 +2386,7 @@ window.addEventListener('load', () => {
   buildLegend();
   updateModeHint();
   const hash = location.hash.slice(1);
-  if (/^[0-9.]{81}$/.test(hash)) {
+  if (/^SSv1/i.test(hash) || /^[0-9.]{81}$/.test(hash)) {
     document.getElementById('puzzle-input').value = hash;
   }
   loadPuzzle();
