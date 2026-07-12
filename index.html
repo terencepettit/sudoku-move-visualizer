@@ -9,26 +9,33 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+html, body { height: 100%; }
 body {
   font-family: 'Roboto', 'Helvetica Neue', sans-serif;
   background: #fafafa;
   color: #181818;
-  padding: 16px 20px;
-  min-height: 100vh;
+  overflow: hidden;              /* the page itself never scrolls */
 }
 
-body > * { max-width: 960px; margin-left: auto; margin-right: auto; }
+/* App shell: one fixed, viewport-filling flex column. Only inner panels scroll. */
+#app {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+}
 
-h1 { font-size: 1.2em; color: #181818; margin-bottom: 14px; font-weight: 500; letter-spacing: 0.02em; }
+/* Header: title + toolbar on one fixed-height row. */
+#topbar { flex: none; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+#app-title { font-size: 1.1em; font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; }
 
 /* ── Toolbar ── */
 #toolbar {
+  flex: 1;
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 18px;
-  max-width: 900px;
 }
 
 #puzzle-input {
@@ -111,13 +118,21 @@ body.highlight-mode #highlight-panel { display: block; }
 }
 
 /* ── Main layout ── */
-#main { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
-#board-col { display: flex; flex-direction: column; gap: 14px; flex-shrink: 0; }
+#main { flex: 1; min-height: 0; display: flex; gap: 20px; align-items: stretch; }
+#board-col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+/* Flex cell that centers the board and gives fitBoard() the space to scale it into. */
+#board-fit { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 
 /* ── Legend ── */
+/* Sits to the LEFT of the board as a narrow vertical column so the board can use the
+   full width/height of the body region. Sections stack top-to-bottom. */
 #legend {
-  display: flex; flex-wrap: wrap; gap: 12px 28px;
-  padding: 12px 14px;
+  flex: none;
+  align-self: center;               /* vertically centre beside the board */
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 10px 12px;
   background: #f7f7f7;
   border: 1px solid #e4e4e4;
   border-radius: 6px;
@@ -133,7 +148,6 @@ body.highlight-mode #highlight-panel { display: block; }
 .lg-badge {
   width: 14px; height: 14px; border-radius: 2px; border: 1px solid #000; flex-shrink: 0;
 }
-.lg-sq { width: 13px; height: 13px; flex-shrink: 0; background: transparent; }
 
 /* ── Grid ── */
 /* Grid lines are real layout space, not an overlay: the 70px cell tracks are
@@ -218,19 +232,20 @@ body.highlight-mode .cell { cursor: pointer; }
 
 /* ── Side panel ── */
 #side-panel {
-  flex: 1;
-  min-width: 280px;
-  max-width: 420px;
+  flex: none;
+  width: 300px;
+  min-height: 0;
+  display: flex; flex-direction: column; gap: 12px;
 }
 
-/* Static per-mode hint under the toolbar */
+/* Static per-mode hint under the board */
 #mode-hint {
+  flex: none;
   font-size: 12px;
   color: #78909c;
-  line-height: 1.5;
-  margin-bottom: 18px;
-  min-height: 18px;
-  max-width: 900px;
+  line-height: 1.4;
+  min-height: 16px;
+  text-align: center;
 }
 
 /* Transient toast for action feedback */
@@ -276,9 +291,12 @@ body.highlight-mode .cell { cursor: pointer; }
   margin-bottom: 10px;
 }
 
-#truth-list { margin-bottom: 16px; }
-#link-panel { display: none; }        /* shown by renderTruthPanel when links exist */
-#link-list { margin-bottom: 16px; }
+/* Truths and Links each take a share of the rail's leftover height and scroll internally. */
+#truth-section { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+#truth-list { flex: 1; min-height: 0; overflow-y: auto; }
+#link-panel { display: none; flex: 1 1 0; min-height: 0; flex-direction: column; }  /* shown as flex by renderTruthPanel when links exist */
+#link-list { flex: 1; min-height: 0; overflow-y: auto; }
+.panel-title { flex: none; }
 
 .truth-item {
   display: flex;
@@ -340,7 +358,9 @@ body.highlight-mode .cell { cursor: pointer; }
 }
 
 #check-result {
-  margin-top: 14px;
+  flex: none;
+  max-height: 34%;
+  overflow-y: auto;
   padding: 10px;
   background: #eceff1;
   border: 1px solid #cfd8dc;
@@ -360,22 +380,27 @@ body.highlight-mode .cell { cursor: pointer; }
 
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* Shrink the (fixed-size) board to fit narrow screens. `zoom` scales layout
-   footprint too, so surrounding flow stays correct. */
-@media (max-width: 760px) {
-  #grid-wrap { zoom: 0.72; }
-}
-@media (max-width: 560px) {
-  #grid-wrap { zoom: 0.52; }
-  #side-panel { max-width: none; }
+/* The board is scaled to fit its cell by fitBoard() (JS), not fixed breakpoints.
+   On narrow screens the rail stacks under the board and the body region scrolls. */
+@media (max-width: 720px) {
+  #main { flex-direction: column; overflow-y: auto; }
+  #board-col { flex: none; order: 1; }
+  #board-fit { min-height: 300px; }
+  /* Back to a horizontal strip below the board on narrow screens. */
+  #legend { order: 2; align-self: stretch; max-height: none; overflow: visible;
+            flex-direction: row; flex-wrap: wrap; gap: 8px 24px; }
+  #side-panel { width: auto; order: 3; }
+  #truth-section, #link-panel { flex: none; }
+  #truth-list, #link-list { overflow: visible; }
 }
 </style>
 </head>
 <body class="edit-mode">
 
-<h1>Sudoku Move Visualizer</h1>
-
-<div id="toolbar">
+<div id="app">
+<header id="topbar">
+  <span id="app-title">Sudoku Move Visualizer</span>
+  <div id="toolbar">
   <input id="puzzle-input" type="text"
     placeholder="81-digit string (0=empty)"
     value="000000094760910050090002081070050010000709000080030067240100070010090045900000100">
@@ -397,18 +422,20 @@ body.highlight-mode .cell { cursor: pointer; }
   </label>
   <span class="sep">|</span>
   <button id="btn-undo" class="btn-secondary" onclick="undo()" disabled>↶ Undo</button>
-</div>
-
-<div id="mode-hint"></div>
+  </div>
+</header>
 
 <div id="main">
+  <div id="legend"></div>
   <div id="board-col">
-    <div id="grid-wrap">
-      <div id="grid"></div>
-      <svg id="truth-svg"></svg>
-      <svg id="drag-svg"></svg>
+    <div id="board-fit">
+      <div id="grid-wrap">
+        <div id="grid"></div>
+        <svg id="truth-svg"></svg>
+        <svg id="drag-svg"></svg>
+      </div>
     </div>
-    <div id="legend"></div>
+    <div id="mode-hint"></div>
   </div>
 
   <div id="side-panel">
@@ -416,9 +443,11 @@ body.highlight-mode .cell { cursor: pointer; }
       <div class="panel-title">Highlight</div>
       <span id="palette"></span>
     </div>
-    <div class="panel-title">Truths</div>
-    <div id="truth-list">
-      <div class="no-truths">No truths drawn yet.<br>Switch to Draw Truths mode, then drag between candidates of the same digit in the same unit, or click a cell to mark it as a cell truth.</div>
+    <div id="truth-section">
+      <div class="panel-title">Truths</div>
+      <div id="truth-list">
+        <div class="no-truths">No truths drawn yet.<br>Switch to Draw Truths mode, then drag between candidates of the same digit in the same unit, or click a cell to mark it as a cell truth.</div>
+      </div>
     </div>
     <div id="link-panel">
       <div class="panel-title">Links</div>
@@ -430,6 +459,7 @@ body.highlight-mode .cell { cursor: pointer; }
     </div>
     <div id="check-result"></div>
   </div>
+</div>
 </div>
 
 <div id="toast"></div>
@@ -697,8 +727,14 @@ function buildLegend() {
     `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="0.05"/>` +
     `<line x1="1" y1="${9 - half}" x2="29" y2="${9 - half}" stroke="${color}" stroke-width="1" opacity="0.7"/>` +
     `<line x1="1" y1="${9 + half}" x2="29" y2="${9 + half}" stroke="${color}" stroke-width="1" opacity="0.7"/></svg>`;
-  const sqTruth = (color) => `<span class="lg-sq" style="background:${color};border:1px solid ${color};border-radius:4px;opacity:0.7"></span>`;
-  const sqLink  = (color) => `<span class="lg-sq" style="background:${color}1a;border:1px solid ${color}b3;border-radius:4px"></span>`;
+  // Cell swatches use the same 30×18 SVG box as the line samples so their labels line up and
+  // the square centres under the lines. Square is 13×13, centred: x=(30-13)/2, y=(18-13)/2.
+  const sqTruth = (color) =>
+    `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="4" ` +
+    `fill="${color}" stroke="${color}" stroke-width="1" opacity="0.7"/></svg>`;
+  const sqLink  = (color) =>
+    `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="4" ` +
+    `fill="${color}" fill-opacity="0.1" stroke="${color}" stroke-opacity="0.7" stroke-width="1"/></svg>`;
   const badge = (bg, ring) =>
     `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:0 0 0 2px ${ring}` : ''}"></span>`;
   const ROW = '#a020f0', COL = '#00702f', BOX = '#c05800', CELL = TRUTH_COLOR;
@@ -721,7 +757,7 @@ function buildLegend() {
       <div class="legend-row">${tube(LINK_LINE_GRAY, 2)} Row</div>
       <div class="legend-row">${tube(LINK_LINE_GRAY, 2)} Column</div>
       <div class="legend-row">${tube(BOX, 4)} Box</div>
-      <div class="legend-row">${sqLink(CELL)} Cell</div>
+      <div class="legend-row">${sqLink(LINK_LINE_GRAY)} Cell</div>
     </div>`;
 }
 
@@ -1171,8 +1207,9 @@ function _checkMoveImpl() {
 // Convert a raw cover set (from buildAllSets) into a link render object (dashed).
 function coverToLink(cover) {
   if (cover.type === 'cell') {
+    // Cell links render grey like row/column links (cell truths stay blue).
     return { isCellTruth: true, keys: cover.keys, keySet: cover.keySet, sig: cover.sig,
-             label: cover.label, fromKey: cover.keys[0], color: TRUTH_COLOR };
+             label: cover.label, fromKey: cover.keys[0], color: LINK_LINE_GRAY };
   }
   const link = { isCellTruth: false, unit: cover.unit, digit: cover.digit,
                  keys: cover.keys, keySet: cover.keySet, sig: cover.sig, label: cover.label };
@@ -1495,13 +1532,15 @@ function showCheckResult(result, numPC, numFound) {
     .join(', ');
   const rankTag = result.rank === 0 ? 'Rank-0' : result.rank !== null ? `Rank-${result.rank}` : 'Forcing chains';
   const countNote = result.assignmentCount > 1 ? ` · ${result.assignmentCount} valid assignments` : '';
-  const coverLine = result.covers
-    ? `<div><span style="color:#889">Covers:</span> <span class="cr-covers">${result.covers.map(c => c.label).join(', ')}</span></div>`
+  // Covers aren't listed here — they're already the LINKS panel. Only the forcing-chain
+  // case (no covers) gets a method note, since it has nothing in that panel.
+  const methodLine = result.covers
+    ? ''
     : `<div><span style="color:#889">Method:</span> truth forcing chain (case-split)</div>`;
   el.innerHTML =
     `<div class="cr-head">✓ ${rankTag}${countNote}</div>` +
     `<div><span style="color:#889">Eliminate:</span> <span class="cr-elims">${elimDesc}</span></div>` +
-    coverLine +
+    methodLine +
     `<button id="apply-elims-btn" onclick="applyEliminations()">Apply Eliminations</button>`;
   el.classList.add('visible');
 }
@@ -2151,7 +2190,7 @@ function renderTruthPanel() {
   const linkPanel = document.getElementById('link-panel');
   const linkList  = document.getElementById('link-list');
   linkList.innerHTML = '';
-  linkPanel.style.display = links.length ? 'block' : 'none';
+  linkPanel.style.display = links.length ? 'flex' : 'none';
   links.forEach((link, i) => {
     const item = document.createElement('div');
     item.className = 'truth-item' + (link.hidden ? ' link-off' : '');
@@ -2211,7 +2250,7 @@ function clearChecking() {
 // Static per-mode instruction shown under the toolbar.
 const MODE_HINTS = {
   edit:      'Edit — click a candidate to remove it, or click a cell and press 1–9 to place a digit.',
-  draw:      'Draw Truths — drag between two candidates (same digit, shared unit) to add a truth, or click a cell for a cell-truth. Then Check Move: if valid, the covering links (dashed) and eliminations appear.',
+  draw:      'Draw Truths — drag between two candidates to add a truth, or click a cell for a cell-truth.',
   highlight: 'Highlight — pick a colour, then click or drag across cells to shade them.'
 };
 function updateModeHint() {
@@ -2473,6 +2512,25 @@ function loadPuzzle() {
   setStatus('Puzzle loaded.', 'info');
 }
 
+// Scale the fixed 648px board to fit the space its flex cell offers (width AND height),
+// then realign the SVG overlay. `zoom` shrinks the layout footprint too, and
+// getBoundingClientRect reflects it, so renderTruthSVG stays pixel-aligned at any scale.
+const BOARD_PX = 648;
+let fitting = false;
+function fitBoard() {
+  if (fitting) return;                 // guard against re-entrancy from the observer
+  const fit = document.getElementById('board-fit');
+  const wrap = document.getElementById('grid-wrap');
+  if (!fit || !wrap) return;
+  const availW = fit.clientWidth, availH = fit.clientHeight;
+  if (availW < 2 || availH < 2) return;
+  const z = Math.min(1, availW / BOARD_PX, availH / BOARD_PX);
+  fitting = true;
+  wrap.style.zoom = z;
+  renderTruthSVG();                    // realign the overlay to the new scale
+  fitting = false;
+}
+
 window.addEventListener('load', () => {
   setupDragHandlers();
   buildPalette();
@@ -2483,6 +2541,11 @@ window.addEventListener('load', () => {
     document.getElementById('puzzle-input').value = hash;
   }
   loadPuzzle();
+  // Keep the board sized to its cell. window.resize covers viewport changes; the
+  // ResizeObserver covers cell changes driven by rail/legend content reflow.
+  window.addEventListener('resize', fitBoard);
+  new ResizeObserver(fitBoard).observe(document.getElementById('board-fit'));
+  fitBoard();
 });
 </script>
 </body>
