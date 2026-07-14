@@ -1761,10 +1761,16 @@ function renderTruthSVG() {
   const truthKeySet = new Set(userTruths.flatMap(t => t.keys));
   const elimKeySet  = new Set(((lastCheck && lastCheck.elims) || []).map(([c, d]) => candKey(c, d)));
 
-  // Grid-line intervals of every link segment drawn so far this render, so an L-route can pick the
-  // elbow that stacks least on existing links. {horiz, line (row for horiz | col for vert), lo, hi}
-  // in grid coordinates. Only link rendering calls addSeg, so this holds links only; fresh per render.
-  const linkSegRegistry = [];
+  // Two-pass link routing so an L-route's elbow can avoid straight links regardless of draw order.
+  // Pass 1 (planningPass) runs the routing for every cover and gathers the *straight* link segments —
+  // the only ones whose position doesn't depend on any elbow choice. Pass 2 seeds the overlap
+  // registry with them, so each L-elbow is scored against every straight link up front. (T-junction
+  // stubs are left out of the seed: their position depends on the elbows themselves, so pre-seeding
+  // pass-1 stub positions would bias the pass-2 choices; they're still registered as pass 2 draws
+  // them.) Grid-line intervals: {horiz, line (row for horiz | col for vert), lo, hi}.
+  let planningPass = false;
+  const straightSegs = [];      // position-independent straight link segments, gathered in pass 1
+  const linkSegRegistry = [];   // what L-elbow scoring sees in pass 2 (seeded with straightSegs)
 
   // Position of digit in a cell (works even if the digit isn't a current candidate)
   function ghostCandCenter(cellIdx, digit) {
@@ -2014,10 +2020,13 @@ function renderTruthSVG() {
       const tubeW = dashed ? LINK_TUBE_HALF[set.unit < 9 ? 'row' : set.unit < 18 ? 'col' : 'box'] : 0;
       const ptOf = (r, c) => candCenter(candKey(r * 9 + c, digit)) || ghostCandCenter(r * 9 + c, digit);
 
-      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('opacity', dashed ? '1' : '0.7');
-      svg.appendChild(group);
-      lineTarget = group;
+      // Pass 1 only plans routes (to gather forced segments); it draws nothing.
+      if (!planningPass) {
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        group.setAttribute('opacity', dashed ? '1' : '0.7');
+        svg.appendChild(group);
+        lineTarget = group;
+      }
 
       if (!dashed) {
         // Truth: chain candidates in sorted order, each as a straight / L-routed solid line.
@@ -2049,15 +2058,19 @@ function renderTruthSVG() {
       // segs (grid) drive drop-target search; routes (pixel) are handed to renderLinkTubes, which
       // merges collinear runs and draws clean tubes + flowing T-junctions.
       const segs = [], routes = [];
-      const addSeg = (r1, c1, r2, c2, pt) => {
+      // `straight` marks a position-independent straight link segment (only these seed pass 1); a
+      // T-junction stub or an L-route arm passes false. Pass 1 gathers the straights; pass 2 registers
+      // everything that isn't a straight (straights are already in the registry from the seed).
+      const addSeg = (r1, c1, r2, c2, pt, straight) => {
         segs.push({
           horiz: r1 === r2, vert: c1 === c2,
           rlo: Math.min(r1, r2), rhi: Math.max(r1, r2), clo: Math.min(c1, c2), chi: Math.max(c1, c2),
           pix: r1 === r2 ? pt[1] : pt[0] });
-        // Register as a grid-line interval so later L-routes can score overlap against it.
-        linkSegRegistry.push(r1 === r2
+        const gi = r1 === r2
           ? { horiz: true,  line: r1, lo: Math.min(c1, c2), hi: Math.max(c1, c2) }
-          : { horiz: false, line: c1, lo: Math.min(r1, r2), hi: Math.max(r1, r2) });
+          : { horiz: false, line: c1, lo: Math.min(r1, r2), hi: Math.max(r1, r2) };
+        if (planningPass) { if (straight) straightSegs.push(gi); }
+        else if (!straight) linkSegRegistry.push(gi);
       };
       // Collinear-overlap length of a candidate grid-line interval against already-drawn links.
       const overlapScore = (horiz, line, lo, hi) => {
@@ -2083,14 +2096,14 @@ function renderTruthSVG() {
           const scoreB = overlapScore(true, br, cLo, cHi) + overlapScore(false, tc, tr, br);
           if (scoreB < scoreA) {
             routes.push({ pts: [botP, [topP[0], botP[1]], topP], ts: true, te: true });
-            addSeg(br, bc, br, tc, botP); addSeg(br, tc, tr, tc, topP);
+            addSeg(br, bc, br, tc, botP, false); addSeg(br, tc, tr, tc, topP, false);
           } else {
             routes.push({ pts: [botP, [botP[0], topP[1]], topP], ts: true, te: true });
-            addSeg(br, bc, tr, bc, botP); addSeg(tr, bc, tr, tc, topP);
+            addSeg(br, bc, tr, bc, botP, false); addSeg(tr, bc, tr, tc, topP, false);
           }
         } else {
           routes.push({ pts: [p1, p2], ts: true, te: true });
-          addSeg(r1, c1, r2, c2, p1);
+          addSeg(r1, c1, r2, c2, p1, true);
         }
       };
       const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
@@ -2125,19 +2138,28 @@ function renderTruthSVG() {
           const footPix = footSeg.horiz ? [elimPt[0], footSeg.pix] : [footSeg.pix, elimPt[1]];
           const footBadge = truthKeySet.has(candKey(footR * 9 + footC, digit)) || elimKeySet.has(candKey(footR * 9 + footC, digit));
           routes.push({ pts: [elimPt, footPix], ts: true, te: footBadge });
-          addSeg(er, ec, footR, footC, elimPt);
+          addSeg(er, ec, footR, footC, elimPt, false);   // stub position depends on elbows → not a seed
         } else {
           routeCells(er, ec, Math.floor(bnode / 9), bnode % 9);
         }
         connected.push(e);
       }
-      renderLinkTubes(routes, color, tubeW);
+      if (!planningPass) renderLinkTubes(routes, color, tubeW);
     }
   }
 
   // Draw order (bottom → top): cell truths (filled squares) behind everything; then links; then
   // BOX line truths; then row/column line truths on top (a truth's solid centre line sits in the
   // hollow middle of any tube it stacks with, and box truths sit behind the thinner row/col ones).
+  // Pass 1: plan every cover's link route to gather all straight link segments (no drawing), then
+  // seed the overlap registry with them so pass-2 L-elbows avoid straight links regardless of order.
+  if (showLinks) {
+    planningPass = true;
+    for (const link of ((lastCheck && lastCheck.covers) || [])) if (!link.hidden) renderSet(link, true);
+    planningPass = false;
+    for (const s of straightSegs) linkSegRegistry.push(s);
+  }
+  // Pass 2: draw in z-order (cell truths behind; links; box truths; row/col truths on top).
   for (const truth of userTruths) if (truth.isCellTruth) renderSet(truth, false);
   if (showLinks)
     for (const link of ((lastCheck && lastCheck.covers) || [])) if (!link.hidden) renderSet(link, true);
