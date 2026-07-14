@@ -1761,6 +1761,11 @@ function renderTruthSVG() {
   const truthKeySet = new Set(userTruths.flatMap(t => t.keys));
   const elimKeySet  = new Set(((lastCheck && lastCheck.elims) || []).map(([c, d]) => candKey(c, d)));
 
+  // Grid-line intervals of every link segment drawn so far this render, so an L-route can pick the
+  // elbow that stacks least on existing links. {horiz, line (row for horiz | col for vert), lo, hi}
+  // in grid coordinates. Only link rendering calls addSeg, so this holds links only; fresh per render.
+  const linkSegRegistry = [];
+
   // Position of digit in a cell (works even if the digit isn't a current candidate)
   function ghostCandCenter(cellIdx, digit) {
     const cellEl = cellEls[cellIdx];
@@ -2044,20 +2049,45 @@ function renderTruthSVG() {
       // segs (grid) drive drop-target search; routes (pixel) are handed to renderLinkTubes, which
       // merges collinear runs and draws clean tubes + flowing T-junctions.
       const segs = [], routes = [];
-      const addSeg = (r1, c1, r2, c2, pt) => segs.push({
-        horiz: r1 === r2, vert: c1 === c2,
-        rlo: Math.min(r1, r2), rhi: Math.max(r1, r2), clo: Math.min(c1, c2), chi: Math.max(c1, c2),
-        pix: r1 === r2 ? pt[1] : pt[0] });
-      // Route between two present candidate cells: straight, or L-routed (corner in pixel space).
+      const addSeg = (r1, c1, r2, c2, pt) => {
+        segs.push({
+          horiz: r1 === r2, vert: c1 === c2,
+          rlo: Math.min(r1, r2), rhi: Math.max(r1, r2), clo: Math.min(c1, c2), chi: Math.max(c1, c2),
+          pix: r1 === r2 ? pt[1] : pt[0] });
+        // Register as a grid-line interval so later L-routes can score overlap against it.
+        linkSegRegistry.push(r1 === r2
+          ? { horiz: true,  line: r1, lo: Math.min(c1, c2), hi: Math.max(c1, c2) }
+          : { horiz: false, line: c1, lo: Math.min(r1, r2), hi: Math.max(r1, r2) });
+      };
+      // Collinear-overlap length of a candidate grid-line interval against already-drawn links.
+      const overlapScore = (horiz, line, lo, hi) => {
+        let s = 0;
+        for (const g of linkSegRegistry)
+          if (g.horiz === horiz && g.line === line) s += Math.max(0, Math.min(hi, g.hi) - Math.max(lo, g.lo));
+        return s;
+      };
+      // Route between two present candidate cells: straight, or L-routed. An L has two possible
+      // elbows; pick whichever's two arms stack least on links already drawn this render (tie → the
+      // vertical-from-lower / horizontal-into-upper convention, so unconstrained cases stay stable).
       const routeCells = (r1, c1, r2, c2) => {
         const p1 = ptOf(r1, c1), p2 = ptOf(r2, c2);
         if (!p1 || !p2) return;
         if (r1 !== r2 && c1 !== c2) {
           const topP = r1 <= r2 ? p1 : p2, botP = r1 <= r2 ? p2 : p1;
-          const [tr, tc] = r1 <= r2 ? [r1, c1] : [r2, c2];
-          const [br, bc] = r1 <= r2 ? [r2, c2] : [r1, c1];
-          routes.push({ pts: [botP, [botP[0], topP[1]], topP], ts: true, te: true });
-          addSeg(br, bc, tr, bc, botP); addSeg(tr, bc, tr, tc, topP);
+          const [tr, tc] = r1 <= r2 ? [r1, c1] : [r2, c2];   // top = smaller row
+          const [br, bc] = r1 <= r2 ? [r2, c2] : [r1, c1];   // bottom = larger row
+          const cLo = Math.min(bc, tc), cHi = Math.max(bc, tc);
+          // A: vertical down bottom's column (bc) + horizontal along top's row (tr) — corner (bc,tr).
+          // B: horizontal along bottom's row (br) + vertical up top's column (tc) — corner (tc,br).
+          const scoreA = overlapScore(false, bc, tr, br) + overlapScore(true, tr, cLo, cHi);
+          const scoreB = overlapScore(true, br, cLo, cHi) + overlapScore(false, tc, tr, br);
+          if (scoreB < scoreA) {
+            routes.push({ pts: [botP, [topP[0], botP[1]], topP], ts: true, te: true });
+            addSeg(br, bc, br, tc, botP); addSeg(br, tc, tr, tc, topP);
+          } else {
+            routes.push({ pts: [botP, [botP[0], topP[1]], topP], ts: true, te: true });
+            addSeg(br, bc, tr, bc, botP); addSeg(tr, bc, tr, tc, topP);
+          }
         } else {
           routes.push({ pts: [p1, p2], ts: true, te: true });
           addSeg(r1, c1, r2, c2, p1);
