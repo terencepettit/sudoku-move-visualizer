@@ -932,6 +932,29 @@ function clearAll() {
 
 // ── Check Move ─────────────────────────────────────────────────────────────
 
+// Partition the truths into independent moves. Two truths are *coupled* when a candidate of one
+// conflicts with a candidate of the other — same cell (one value), or same digit in cells that see
+// each other. Any cover that genuinely links two truths shares a house with candidates of both, so
+// it already couples them; connectivity over the truths alone therefore tells us whether the drawn
+// structure is one connected move or several bundled together. Returns an array of components.
+function truthComponents(truths) {
+  const sees = (c1, c2) => c1 !== c2 && CELL_UNITS[c1].some(u => UNIT_CELLS[u].includes(c2));
+  const conflict = (kA, kB) => {
+    const cA = keyCell(kA), cB = keyCell(kB);
+    if (cA === cB) return true;                                // same cell → only one can be true
+    return keyDigit(kA) === keyDigit(kB) && sees(cA, cB);      // same digit in cells that see each other
+  };
+  const coupled = (a, b) => truths[a].keys.some(kA => truths[b].keys.some(kB => conflict(kA, kB)));
+  const parent = truths.map((_, i) => i);
+  const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  for (let i = 0; i < truths.length; i++)
+    for (let j = i + 1; j < truths.length; j++)
+      if (coupled(i, j)) parent[find(i)] = find(j);
+  const groups = new Map();
+  truths.forEach((t, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(t); });
+  return [...groups.values()];
+}
+
 function checkMove() {
   clearCheckResult();
   if (!userTruths.length) {
@@ -948,6 +971,19 @@ function _checkMoveWork() {
 
 function _checkMoveImpl() {
   const n = userTruths.length;
+
+  // A single move must be one connected structure. If the truths split into independent
+  // constraint-coupled groups, they're really several unrelated moves drawn together — reject,
+  // since the visualizer is meant to show one move at a time.
+  const components = truthComponents(userTruths);
+  if (components.length > 1) {
+    lastCheck = null;
+    buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel();
+    showDecomposedResult(components);
+    setStatus(`Not a single move — these truths form ${components.length} independent moves.`, 'err');
+    return;
+  }
+
   const baseKeyArr = userTruths.flatMap(t => t.keys);
   const baseKeySet = new Set(baseKeyArr);
 
@@ -1513,6 +1549,20 @@ function checkByTruthAssignment(userTruths) {
     if (cands[cell].has(digit)) elims.push([cell, digit]);
   }
   return elims;
+}
+
+// Shown when the truths decompose into several independent moves: name each group so the user can
+// see which truths belong together and split them into separate moves.
+function showDecomposedResult(components) {
+  const el = document.getElementById('check-result');
+  const groups = components
+    .map((g, i) => `<div><span style="color:#889">Move ${i + 1}:</span> <span class="cr-covers">${g.map(t => t.label).join(', ')}</span></div>`)
+    .join('');
+  el.innerHTML =
+    `<div class="cr-none">✗ Not a single move</div>` +
+    `<div style="margin:5px 0 8px">These truths form ${components.length} independent moves with nothing connecting them — check each one on its own.</div>` +
+    groups;
+  el.classList.add('visible');
 }
 
 function showCheckResult(result, numPC, numFound) {
