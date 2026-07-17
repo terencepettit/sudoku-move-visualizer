@@ -9,11 +9,70 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Design tokens ────────────────────────────────────────────────────────────
+   One home for the CHROME's palette and shape. The visualization colours
+   (row/col/box/cell/link) deliberately live in JS next to the render code — they
+   carry meaning, so they're not chrome and must not be re-themed casually. */
+:root {
+  /* Neutral ramp, very slightly warm so the purple/green/brown viz colours sit calmly on it */
+  --n-0:   #ffffff;   /* cell face */
+  --n-25:  #fbfbfa;   /* app canvas */
+  --n-50:  #f6f6f4;   /* subtle surface / row hover */
+  --n-100: #f0f0ed;   /* segmented track, button hover */
+  --n-150: #e6e6e2;   /* dividers, input border */
+  --n-200: #dcdcd7;   /* thin grid lines */
+  --n-300: #bdbdb7;   /* grid border + box separators */
+  --n-400: #a8a8a1;   /* candidate digits */
+  --n-500: #8a8a83;   /* muted text */
+  --n-600: #66665f;   /* secondary text */
+  --n-800: #33332f;   /* strong text */
+  --n-900: #1a1a18;   /* primary text, given digits */
+
+  --accent:    #1a7fff;
+  --danger:    #b3261e;
+  --danger-bg: #fdeceb;
+  --ok:        #1f7a3d;
+
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-2: 0 4px 16px rgba(0,0,0,0.10);
+}
+
+/* Dark mode: a manual opt-in (data-theme="dark" set by the toggle) — never auto-enabled from the OS.
+   The neutral ramp flips end-for-end: --n-0 becomes the (dark) cell face, --n-900 the light text, so
+   every `var(--n-…)` reference lands correctly without touching the rules that use them. Viz colours
+   are re-tuned separately in JS (VIZ_THEMES). */
+:root[data-theme="dark"] {
+  --n-0:   #1c1c22;
+  --n-25:  #141417;
+  --n-50:  #1f1f26;
+  --n-100: #26262e;
+  --n-150: #33333b;
+  --n-200: #3a3a42;
+  --n-300: #50505a;
+  --n-400: #68686f;
+  --n-500: #85858f;
+  --n-600: #a6a6ae;
+  --n-800: #d2d2ce;
+  --n-900: #e7e7e3;
+
+  --accent:    #3d8bfd;
+  --danger:    #ff6b6b;
+  --danger-bg: #3a1f22;
+  --ok:        #46c46a;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-2: 0 6px 24px rgba(0,0,0,0.5);
+}
+
 html, body { height: 100%; }
 body {
   font-family: 'Roboto', 'Helvetica Neue', sans-serif;
-  background: #fafafa;
-  color: #181818;
+  background: var(--n-25);
+  color: var(--n-900);
   overflow: hidden;              /* the page itself never scrolls */
 }
 
@@ -25,15 +84,16 @@ body {
   padding: 12px 16px;
 }
 
-/* Header: title + toolbar on one fixed-height row. */
-#topbar { flex: none; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-#app-title { font-size: 1.1em; font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; }
+/* Header: title + toolbar on one fixed-height row. The title is a quiet label, not a banner —
+   the board is the subject of the page. */
+#topbar { flex: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+#app-title { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; color: var(--n-500); }
 
 /* ── Toolbar ── */
 #toolbar {
   flex: 1;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -41,62 +101,84 @@ body {
 #puzzle-input {
   flex: 1;
   min-width: 240px;
-  padding: 7px 11px;
-  font-family: monospace;
+  padding: 6px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  background: #fff;
-  border: 1px solid #b0bec5;
-  border-radius: 4px;
-  color: #181818;
+  background: var(--n-0);
+  border: 1px solid var(--n-150);
+  border-radius: var(--r-md);
+  color: var(--n-900);
   outline: none;
 }
-#puzzle-input:focus { border-color: #546e7a; }
+#puzzle-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26,127,255,0.12); }
 
-/* Base button = neutral action (grey). Semantic variants below. */
+/* Base button = quiet ghost action, so the toolbar reads as text until you need it.
+   Semantic variants below earn their weight. */
 button {
-  padding: 7px 14px;
-  background: #546e7a;
+  padding: 6px 10px;
+  background: transparent;
   border: none;
-  border-radius: 4px;
-  color: #fff;
+  border-radius: var(--r-md);
+  color: var(--n-600);
   cursor: pointer;
-  font-size: 13px;
-  font-family: 'Roboto', 'Helvetica Neue', sans-serif;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: 400;
   white-space: nowrap;
-  letter-spacing: 0.03em;
 }
-button:hover { background: #607d8b; }
-button:disabled { background: #cfd8dc; color: #90a4ae; cursor: default; border-color: #cfd8dc; }
+button:hover { background: var(--n-100); color: var(--n-900); }
+button:disabled { background: transparent; color: var(--n-300); cursor: default; }
 
 /* Keyboard focus ring */
 button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
-  outline: 2px solid #1a7fff; outline-offset: 2px;
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
-.sep { color: #b0bec5; font-size: 18px; padding: 0 2px; user-select: none; }
+/* A real 1px rule between toolbar groups (replaces the literal "|" characters). */
+.sep { width: 1px; height: 16px; background: var(--n-150); flex: none; }
 
-/* Mode buttons (toggle group) */
-.mode-btn { background: #eceff1; color: #546e7a; border: 1px solid #b0bec5; }
-.mode-btn:hover { background: #cfd8dc; color: #37474f; border-color: #78909c; }
-.mode-btn.active { background: #546e7a; color: #fff; border-color: #546e7a; }
-.mode-btn.active:hover { background: #607d8b; }
+/* Segmented control: the editing MODES are one exclusive choice, so they read as a single
+   control rather than three buttons identical to the surrounding actions. */
+.segmented { display: inline-flex; background: var(--n-100); border-radius: var(--r-md); padding: 2px; gap: 2px; }
+.segmented .mode-btn { background: transparent; color: var(--n-600); border-radius: var(--r-sm); padding: 4px 10px; }
+.segmented .mode-btn:hover { background: rgba(0,0,0,0.04); color: var(--n-900); }
+.segmented .mode-btn.active { background: var(--n-0); color: var(--n-900); font-weight: 500; box-shadow: var(--shadow-1); }
 
-/* Semantic action colours */
+/* Links is boolean state, not an action — so it's a switch, not a button that renames itself. */
+.btn-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--n-600); }
+.btn-toggle .switch {
+  width: 24px; height: 14px; border-radius: 99px; background: var(--n-200);
+  position: relative; flex: none; transition: background 0.15s;
+}
+.btn-toggle .switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--n-0);
+  box-shadow: var(--shadow-1); transition: transform 0.15s;
+}
+.btn-toggle:hover { background: var(--n-100); }
+.btn-toggle.active { color: var(--n-900); }
+.btn-toggle.active .switch { background: var(--accent); }
+.btn-toggle.active .switch::after { transform: translateX(10px); }
+
+/* Exactly one solid button on screen: the primary action. */
 .check-btn,
-.btn-primary { background: #2e7d32; }
+.btn-primary { background: var(--n-900); color: var(--n-0); font-weight: 500; padding: 8px 14px; }
 .check-btn:hover,
-.btn-primary:hover { background: #388e3c; }
+.btn-primary:hover { background: var(--n-800); color: var(--n-0); }
 
-.btn-danger { background: #c62828; }
-.btn-danger:hover { background: #b71c1c; }
+/* Destructive stays quiet until you reach for it. */
+.btn-danger { background: transparent; color: var(--n-500); }
+.btn-danger:hover { background: var(--danger-bg); color: var(--danger); }
 
 /* Digit-opacity slider */
-#digit-opacity-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #546e7a; white-space: nowrap; }
-#digit-opacity { width: 90px; cursor: pointer; accent-color: #546e7a; }
+#digit-opacity-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--n-500); white-space: nowrap; }
+#digit-opacity { width: 80px; cursor: pointer; accent-color: var(--accent); }
 
-.btn-secondary { background: #eceff1; color: #546e7a; border: 1px solid #b0bec5; }
-.btn-secondary:hover { background: #cfd8dc; color: #37474f; border-color: #78909c; }
+.btn-secondary { background: transparent; color: var(--n-600); }
+.btn-secondary:hover { background: var(--n-100); color: var(--n-900); }
+
+/* Icon-only button (theme toggle): square, centred glyph. */
+.btn-icon { padding: 6px; width: 30px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; }
 
 /* ── Highlight palette (lives in the side panel, shown only in highlight mode) ── */
 #highlight-panel { display: none; margin-bottom: 16px; }
@@ -104,17 +186,16 @@ body.highlight-mode #highlight-panel { display: block; }
 #palette { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .swatch {
   width: 20px; height: 20px;
-  border-radius: 4px;
-  border: 1px solid #b0bec5;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--n-150);
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
 }
-.swatch:hover { border-color: #546e7a; }
-.swatch.active { border: 2px solid #263238; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #263238; }
+.swatch:hover { border-color: var(--n-400); }
+.swatch.active { border-color: transparent; box-shadow: 0 0 0 2px var(--n-0), 0 0 0 3px var(--n-900); }
 .swatch.eraser {
-  background: #fff;
+  background: var(--n-0);
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; color: #90a4ae; line-height: 1;
+  font-size: 12px; color: var(--n-400); line-height: 1;
 }
 
 /* ── Main layout ── */
@@ -126,27 +207,25 @@ body.highlight-mode #highlight-panel { display: block; }
 /* ── Legend ── */
 /* Sits to the LEFT of the board as a narrow vertical column so the board can use the
    full width/height of the body region. Sections stack top-to-bottom. */
+/* Borderless: a reference key should sit quietly beside the board, not compete with it as a card. */
 #legend {
   flex: none;
   align-self: center;               /* vertically centre beside the board */
   max-height: 100%;
   overflow-y: auto;
-  display: flex; flex-direction: column; gap: 14px;
-  padding: 10px 12px;
-  background: #f7f7f7;
-  border: 1px solid #e4e4e4;
-  border-radius: 6px;
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 4px 2px;
   font-size: 12px;
-  color: #37474f;
+  color: var(--n-600);
 }
-.legend-section { display: flex; flex-direction: column; gap: 6px; }
+.legend-section { display: flex; flex-direction: column; gap: 7px; }
 .legend-title {
-  font-size: 10px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.05em; color: #90a4ae; margin-bottom: 2px;
+  font-size: 9.5px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--n-400); margin-bottom: 2px;
 }
 .legend-row { display: flex; align-items: center; gap: 9px; white-space: nowrap; line-height: 1; }
 .lg-badge {
-  width: 14px; height: 14px; border-radius: 2px; border: 1px solid #000; flex-shrink: 0;
+  width: 15px; height: 15px; border-radius: 4px; flex-shrink: 0;   /* no black hairline; rx matches the cell square */
 }
 
 /* ── Grid ── */
@@ -164,30 +243,34 @@ body.highlight-mode #highlight-panel { display: block; }
 /* 70px cell tracks separated by gap tracks. The thin 1px within-box lines show the light grid
    background; the thick 3px box separators are dark .box-line divs laid into the wide gap tracks,
    and the 3px dark border forms the (matching) outer border. */
+/* Track sizes are load-bearing (they define the 648px board that fitBoard scales), so the refresh
+   changes only colour and corner radius — never geometry. */
 #grid {
   display: inline-grid;
   grid-template-columns: 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
   grid-template-rows:    70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
-  background: #aab0b3;           /* thin within-box grid lines (lighter / more transparent) */
-  border: 3px solid #72787b;     /* thick outer border */
+  background: var(--n-200);           /* thin within-box grid lines */
+  border: 3px solid var(--n-300);     /* outer border, matching the box separators */
+  border-radius: var(--r-lg);
+  overflow: hidden;                   /* clips the corner cells to the radius (SVG overlays are siblings, so unclipped) */
   position: absolute;
   left: 0; top: 0;
 }
-/* Thick box separators — dark, over the light background; the thin 1px gaps keep the background. */
-.box-line { background: #72787b; }
+/* Box separators — same weight as the outer border, over the lighter thin-line background. */
+.box-line { background: var(--n-300); }
 
 .cell {
   width: 70px; height: 70px;
-  background: #fafafa;
+  background: var(--n-0);
   display: flex; align-items: center; justify-content: center;
   position: relative;
   transition: background 0.1s;
   cursor: default;
 }
-.cell.sel { background: #e3f2fd; }
+.cell.sel { background: rgba(26,127,255,0.08); }
 
-.cell.given  .digit { font-size: 46px; font-weight: 500; color: #181818; opacity: var(--digit-opacity, 1); }
-.cell.solved .digit { font-size: 46px; font-weight: 500; color: #0d47a1; opacity: var(--digit-opacity, 1); }
+.cell.given  .digit { font-size: 46px; font-weight: 500; color: var(--n-900); opacity: var(--digit-opacity, 1); }
+.cell.solved .digit { font-size: 46px; font-weight: 500; color: var(--accent);  opacity: var(--digit-opacity, 1); }
 
 .candidates {
   display: grid;
@@ -207,15 +290,15 @@ body.highlight-mode #highlight-panel { display: block; }
   transition: color 0.1s, background 0.1s;
   user-select: none;
 }
-.cand.present { color: #78909c; }
+.cand.present { color: var(--n-400); }
 
 /* In edit mode, candidates show a delete cursor */
 body.edit-mode .cand.present { cursor: pointer; }
-body.edit-mode .cand.present:hover { background: rgba(220,80,80,0.12); color: #c62828; }
+body.edit-mode .cand.present:hover { background: var(--danger-bg); color: var(--danger); }
 
 /* In draw mode, candidates show a crosshair */
 body.draw-mode .cand.present { cursor: crosshair; }
-body.draw-mode .cand.present:hover { background: rgba(84,110,122,0.15); color: #37474f; }
+body.draw-mode .cand.present:hover { background: var(--n-100); color: var(--n-900); }
 body.draw-mode .cell { cursor: crosshair; }
 
 /* In highlight mode, cells show a paint cursor */
@@ -242,7 +325,7 @@ body.highlight-mode .cell { cursor: pointer; }
 #mode-hint {
   flex: none;
   font-size: 12px;
-  color: #78909c;
+  color: var(--n-400);
   line-height: 1.4;
   min-height: 16px;
   text-align: center;
@@ -254,13 +337,13 @@ body.highlight-mode .cell { cursor: pointer; }
   left: 50%;
   bottom: 22px;
   transform: translateX(-50%) translateY(8px);
-  background: #37474f;
-  color: #fff;
+  background: var(--n-900);
+  color: var(--n-0);
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 400;
   padding: 9px 16px;
-  border-radius: 6px;
-  box-shadow: 0 3px 12px rgba(0,0,0,0.22);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
   display: flex; align-items: center; gap: 8px;
   opacity: 0;
   pointer-events: none;
@@ -269,9 +352,9 @@ body.highlight-mode .cell { cursor: pointer; }
   max-width: 90vw;
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-#toast.ok   { background: #2e7d32; }
-#toast.err  { background: #c62828; }
-#toast.info { background: #1565c0; }
+#toast.ok   { background: var(--ok); }
+#toast.err  { background: var(--danger); }
+#toast.info { background: var(--n-900); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner {
@@ -283,12 +366,12 @@ body.highlight-mode .cell { cursor: pointer; }
 }
 
 .panel-title {
-  font-size: 0.88em;
-  font-weight: 600;
-  color: #546e7a;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--n-400);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 10px;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
 }
 
 /* Truths and Links each take a share of the rail's leftover height and scroll internally. */
@@ -298,17 +381,20 @@ body.highlight-mode .cell { cursor: pointer; }
 #link-list { flex: 1; min-height: 0; overflow-y: auto; }
 .panel-title { flex: none; }
 
+/* Borderless rows: this is a list, so it reads as one — hover is enough affordance, and dropping
+   the per-row chrome lets the colour swatch carry the meaning. */
 .truth-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  margin-bottom: 5px;
-  background: #eceff1;
-  border: 1px solid #cfd8dc;
-  border-radius: 4px;
+  gap: 9px;
+  padding: 6px 8px;
+  margin-bottom: 1px;
+  background: transparent;
+  border-radius: var(--r-md);
   font-size: 12px;
+  transition: background 0.1s;
 }
+.truth-item:hover { background: var(--n-50); }
 .truth-swatch {
   width: 10px; height: 10px;
   border-radius: 50%;
@@ -319,39 +405,40 @@ body.highlight-mode .cell { cursor: pointer; }
   width: 10px; height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #fff;
+  background: var(--n-0);
   box-sizing: border-box;
 }
-.truth-label { flex: 1; color: #37474f; }
+.truth-label { flex: 1; color: var(--n-800); }
+/* Row affordances stay invisible until the row is hovered — the list reads as content, not controls. */
 .truth-del {
   padding: 2px 6px;
   font-size: 13px;
   background: none;
-  color: #90a4ae;
+  color: var(--n-300);
   border: none;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   line-height: 1;
 }
-.truth-del:hover { background: #ffcdd2; color: #c62828; }
+.truth-del:hover { background: var(--danger-bg); color: var(--danger); }
 /* Per-link visibility toggle (eye) in the LINKS list. */
 .link-toggle {
   padding: 2px 5px;
   background: none;
   border: none;
   cursor: pointer;
-  border-radius: 3px;
-  color: #607d8b;
+  border-radius: var(--r-sm);
+  color: var(--n-400);
   display: flex;
   align-items: center;
   flex-shrink: 0;
 }
-.link-toggle:hover { background: #cfd8dc; color: #37474f; }
-.truth-item.link-off { opacity: 0.5; }
+.link-toggle:hover { background: var(--n-100); color: var(--n-900); }
+.truth-item.link-off { opacity: 0.45; }
 .truth-item.link-off .truth-label { text-decoration: line-through; }
 
 .no-truths {
-  color: #78909c;
+  color: var(--n-500);
   font-size: 12px;
   line-height: 1.7;
   padding: 6px 0;
@@ -361,22 +448,22 @@ body.highlight-mode .cell { cursor: pointer; }
   flex: none;
   max-height: 34%;
   overflow-y: auto;
-  padding: 10px;
-  background: #eceff1;
-  border: 1px solid #cfd8dc;
-  border-radius: 4px;
+  padding: 10px 12px;
+  background: var(--n-50);
+  border: none;
+  border-radius: var(--r-lg);
   font-size: 12.5px;
   line-height: 1.6;
-  color: #546e7a;
+  color: var(--n-600);
   display: none;
 }
 #check-result.visible { display: block; }
-#check-result .cr-elims { color: #c62828; }
-#check-result .cr-covers { color: #1565c0; }
-#check-result .cr-head { color: #2e7d32; font-weight: 600; }
-#check-result .cr-none { color: #c62828; font-weight: 600; }
-#apply-elims-btn { margin-top: 10px; padding: 6px 14px; background: #c62828; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; }
-#apply-elims-btn:hover { background: #b71c1c; }
+#check-result .cr-elims { color: var(--danger); }
+#check-result .cr-covers { color: var(--accent); }
+#check-result .cr-head { color: var(--ok); font-weight: 500; }
+#check-result .cr-none { color: var(--danger); font-weight: 500; }
+#apply-elims-btn { margin-top: 10px; padding: 6px 12px; background: var(--danger); color: var(--n-0); border: none; border-radius: var(--r-md); cursor: pointer; font-size: 12.5px; font-weight: 500; }
+#apply-elims-btn:hover { background: #8f1e18; color: var(--n-0); }
 
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -409,19 +496,22 @@ body.highlight-mode .cell { cursor: pointer; }
     title="Copy the full current state (givens, solved cells, candidates) to the clipboard — paste it back into this box and Load to restore">Copy State</button>
   <button onclick="skipBasics()"
     title="Auto-apply the basic techniques (naked/hidden singles, locked candidates, naked/hidden subsets)">Auto-fill Basics</button>
-  <span class="sep">|</span>
-  <button id="btn-edit" class="mode-btn active" onclick="setMode('edit')">Edit</button>
-  <button id="btn-draw" class="mode-btn" onclick="setMode('draw')">Draw Truths</button>
-  <button id="btn-highlight" class="mode-btn" onclick="setMode('highlight')">Highlight</button>
-  <span class="sep">|</span>
-  <button id="btn-links" class="mode-btn active" onclick="toggleLinks()"
-    title="Show or hide the covering links on the grid">Links</button>
+  <span class="sep"></span>
+  <div class="segmented" role="group" aria-label="Editing mode">
+    <button id="btn-edit" class="mode-btn active" onclick="setMode('edit')">Edit</button>
+    <button id="btn-draw" class="mode-btn" onclick="setMode('draw')">Draw Truths</button>
+    <button id="btn-highlight" class="mode-btn" onclick="setMode('highlight')">Highlight</button>
+  </div>
+  <span class="sep"></span>
+  <button id="btn-links" class="btn-toggle active" onclick="toggleLinks()" aria-pressed="true"
+    title="Show or hide the covering links on the grid"><span class="switch"></span>Links</button>
   <label id="digit-opacity-label" title="Opacity of the big given/solved digits">Digits
     <input id="digit-opacity" type="range" min="0" max="100" value="100"
       oninput="setDigitOpacity(this.value)">
   </label>
-  <span class="sep">|</span>
+  <span class="sep"></span>
   <button id="btn-undo" class="btn-secondary" onclick="undo()" disabled>↶ Undo</button>
+  <button id="btn-theme" class="btn-secondary btn-icon" onclick="toggleTheme()" title="Switch to dark mode" aria-label="Toggle dark mode" aria-pressed="false">☾</button>
   </div>
 </header>
 
@@ -489,7 +579,27 @@ let paintOp    = null;        // 'paint' | 'erase' for the current drag stroke, 
 const UNDO_LIMIT = 10;
 let undoStack = [];
 
-const TRUTH_COLOR = '#1a7fff';
+// ── Visualization palette ──────────────────────────────────────────────────
+// Viz colours live in JS (next to the render code) on purpose — they carry meaning, so they are NOT
+// chrome and aren't in the CSS token block. They ARE theme-aware: setTheme() swaps the active set and
+// re-derives every colour already stored on a truth/cover. Dark values are re-tuned for a dark canvas
+// — the column green especially (#00702f is near-black on dark → #3fcf7f) and box brown → amber.
+let theme = 'light';
+const VIZ_THEMES = {
+  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#e5484d' },
+  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff6b6b' },
+};
+let TRUTH_COLOR    = VIZ_THEMES.light.cell;   // cell truth / candidate-badge blue
+let VIZ_ROW        = VIZ_THEMES.light.row;    // row truth → purple
+let VIZ_COL        = VIZ_THEMES.light.col;    // column truth → green
+let VIZ_BOX        = VIZ_THEMES.light.box;    // box truth/link → brown (amber in dark)
+let LINK_LINE_GRAY = VIZ_THEMES.light.link;   // row/column LINKS render grey (box links keep VIZ_BOX)
+let ELIM_COLOR     = VIZ_THEMES.light.elim;   // eliminated candidate badge
+function refreshVizColors() {
+  const v = VIZ_THEMES[theme];
+  TRUTH_COLOR = v.cell; VIZ_ROW = v.row; VIZ_COL = v.col; VIZ_BOX = v.box;
+  LINK_LINE_GRAY = v.link; ELIM_COLOR = v.elim;
+}
 // Link "tube" half-widths (perpendicular distance from centre-line to each coloured edge),
 // per unit type. A row link is always horizontal and a column link always vertical, so the two
 // never share a line and can be the same width; only a box link runs collinearly with either
@@ -499,15 +609,24 @@ const TRUTH_COLOR = '#1a7fff';
 const LINK_TUBE_HALF = { row: 2, col: 2, box: 4 };
 // Corner radius for box link/truth elbows, matching the cell-square rx (rounded look).
 const LINK_CORNER_R = 4;
-// Row/column LINKS render grey (truths keep their per-type colour; box links stay brown).
-const LINK_LINE_GRAY = '#757575';
+// A cell truth is a *region* marker sitting behind the candidate badges, and its badges are the same
+// blue — so a heavy fill makes them dissolve into it. Keep the fill a tint and let the (full-opacity)
+// border define the region; the solid badges then read clearly on top. Cell LINKS stay fainter still
+// (LINK_FILL_OP) and are grey, so the two remain easy to tell apart.
+const CELL_TRUTH_FILL_OP = 0.5;
+const CELL_TRUTH_EDGE_OP = 0.9;
+// Single source of truth for link opacity: the tube's coloured edge and its faint interior band.
+// Used by drawTube (line links), the cell-link square, and the legend — they must agree, and
+// previously each hardcoded its own copy.
+const LINK_EDGE_OP = 0.7;
+const LINK_FILL_OP = 0.05;
 
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
-  if (truth.isCellTruth) return '#1a7fff';          // blue
-  if (truth.unit < 9)   return '#a020f0';           // row → purple
-  if (truth.unit < 18)  return '#00702f';           // col → dark green
-  return '#c05800';                                  // box → orange-brown
+  if (truth.isCellTruth) return TRUTH_COLOR;        // blue
+  if (truth.unit < 9)   return VIZ_ROW;             // row → purple
+  if (truth.unit < 18)  return VIZ_COL;             // col → green
+  return VIZ_BOX;                                    // box → brown / amber
 }
 
 // ── Geometry ───────────────────────────────────────────────────────────────
@@ -715,35 +834,36 @@ const HIGHLIGHT_COLORS = ['#fffcd8','#d8eed9','#cfe8fc','#fad0de','#ffeac9','#ea
 
 // Build the legend explaining badge/line colours & styles (mirrors the render code).
 function buildLegend() {
-  // Mirrors the render code exactly. Truth line: 3.5px solid @ 0.7. Truth cell: filled square
-  // (fill 0.7) with a 1px border. Link tube: a faint (0.05) fill band with a 1px coloured edge
-  // (@ 0.7) either side, half-width 2 for row/col and 4 for box (so a box nests outside a line).
-  // Link cell: 1px-bordered square (@ 0.7) with a 10% fill. All squares round to rx 4.
+  // Mirrors the render code exactly, reading the same opacity constants so the key can't drift from
+  // the board. Truth line: 3.5px solid @ 0.7. Truth cell: filled square (fill 0.7) with a 1px border.
+  // Link tube: a faint fill band with a 1px coloured edge either side, half-width 2 for row/col and
+  // 4 for box (so a box nests outside a line). Link cell: 1px-bordered square. Squares round to rx 4.
   const line = (color, w = 3.5) =>
     `<svg width="30" height="18" style="flex-shrink:0"><line x1="1" y1="9" x2="29" y2="9" ` +
     `stroke="${color}" stroke-width="${w}" opacity="0.7"/></svg>`;
   const tube = (color, half) =>
     `<svg width="30" height="18" style="flex-shrink:0">` +
-    `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="0.05"/>` +
-    `<line x1="1" y1="${9 - half}" x2="29" y2="${9 - half}" stroke="${color}" stroke-width="1" opacity="0.7"/>` +
-    `<line x1="1" y1="${9 + half}" x2="29" y2="${9 + half}" stroke="${color}" stroke-width="1" opacity="0.7"/></svg>`;
+    `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="${LINK_FILL_OP}"/>` +
+    `<line x1="1" y1="${9 - half}" x2="29" y2="${9 - half}" stroke="${color}" stroke-width="1" opacity="${LINK_EDGE_OP}"/>` +
+    `<line x1="1" y1="${9 + half}" x2="29" y2="${9 + half}" stroke="${color}" stroke-width="1" opacity="${LINK_EDGE_OP}"/></svg>`;
   // Cell swatches use the same 30×18 SVG box as the line samples so their labels line up and
   // the square centres under the lines. Square is 13×13, centred: x=(30-13)/2, y=(18-13)/2.
   const sqTruth = (color) =>
     `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="4" ` +
-    `fill="${color}" stroke="${color}" stroke-width="1" opacity="0.7"/></svg>`;
+    `fill="${color}" fill-opacity="${CELL_TRUTH_FILL_OP}" stroke="${color}" ` +
+    `stroke-opacity="${CELL_TRUTH_EDGE_OP}" stroke-width="1.5"/></svg>`;
   const sqLink  = (color) =>
     `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="4" ` +
-    `fill="${color}" fill-opacity="0.05" stroke="${color}" stroke-opacity="0.7" stroke-width="1"/></svg>`;
+    `fill="${color}" fill-opacity="${LINK_FILL_OP}" stroke="${color}" stroke-opacity="${LINK_EDGE_OP}" stroke-width="1"/></svg>`;
   const badge = (bg, ring) =>
-    `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:0 0 0 2px ${ring}` : ''}"></span>`;
-  const ROW = '#a020f0', COL = '#00702f', BOX = '#c05800', CELL = TRUTH_COLOR;
+    `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:inset 0 0 0 2px ${ring}` : ''}"></span>`;
+  const ROW = VIZ_ROW, COL = VIZ_COL, BOX = VIZ_BOX, CELL = TRUTH_COLOR;
   document.getElementById('legend').innerHTML = `
     <div class="legend-section">
       <div class="legend-title">Candidates</div>
       <div class="legend-row">${badge(TRUTH_COLOR)} Candidate</div>
-      <div class="legend-row">${badge('#ff0000')} Elimination</div>
-      <div class="legend-row">${badge('#ff0000', TRUTH_COLOR)} Elim. in a truth</div>
+      <div class="legend-row">${badge(ELIM_COLOR)} Elimination</div>
+      <div class="legend-row">${badge(ELIM_COLOR, TRUTH_COLOR)} Elim. in a truth</div>
     </div>
     <div class="legend-section">
       <div class="legend-title">Truths — solid</div>
@@ -1822,9 +1942,9 @@ function applyAllHighlights() {
   const setBadge = (el, bg, fg) => {
     el.style.background  = bg;
     el.style.color       = fg;
-    el.style.fontWeight  = '700';
-    el.style.border      = '1px solid #000';
-    el.style.borderRadius= '2px';
+    el.style.fontWeight  = '500';
+    el.style.border      = 'none';          // no black hairline: it fought the truth/link lines
+    el.style.borderRadius= '4px';           // matches the cell square's rx
     el.style.width       = '17px';
     el.style.height      = '17px';
     el.style.justifySelf = 'center';
@@ -1847,8 +1967,10 @@ function applyAllHighlights() {
       const k = candKey(c, d);
       const el = candEl(k);
       if (el) {
-        setBadge(el, '#ff0000', '#fff');
-        el.style.boxShadow = truthKeySet.has(k) ? `0 0 0 2px ${TRUTH_COLOR}` : '';
+        setBadge(el, ELIM_COLOR, '#fff');
+        // `inset` so the ring grows inward — an outward shadow would make this badge visibly
+        // larger than every other one.
+        el.style.boxShadow = truthKeySet.has(k) ? `inset 0 0 0 2px ${TRUTH_COLOR}` : '';
       }
     }
   }
@@ -1971,7 +2093,7 @@ function renderTruthSVG() {
   // narrower link) show through. Badge ends trim back by GAP; a T-junction end (trimStart/trimEnd
   // false) is kept so the tube reaches the line it joins. Segments are axis-aligned.
   function drawTube(pts, color, W, trimStart = true, trimEnd = true, cuts = null) {
-    const GAP = 8, FILL_OP = 0.05, EDGE_OP = 0.7;
+    const GAP = 8, FILL_OP = LINK_FILL_OP, EDGE_OP = LINK_EDGE_OP;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
     // Trim a badge end inward by GAP along its segment direction (skipped for T-junction ends).
@@ -2164,10 +2286,12 @@ function renderTruthSVG() {
       rect.setAttribute('height', halfH * 2);
       rect.setAttribute('rx', '4');
       rect.setAttribute('fill', color);
-      rect.setAttribute('fill-opacity', dashed ? '0.05' : '0.7');   // link: faint 5% fill; truth: solid
+      // Truth: a tint with a crisp border — it marks the region, the badges on top are the content.
+      // Link: fainter fill and a lighter 1px border (and grey), so the two never read alike.
+      rect.setAttribute('fill-opacity',   String(dashed ? LINK_FILL_OP : CELL_TRUTH_FILL_OP));
       rect.setAttribute('stroke', color);
-      rect.setAttribute('stroke-width', '1');
-      rect.setAttribute('stroke-opacity', '0.7');
+      rect.setAttribute('stroke-width',   dashed ? '1' : '1.5');
+      rect.setAttribute('stroke-opacity', String(dashed ? LINK_EDGE_OP : CELL_TRUTH_EDGE_OP));
       svg.appendChild(rect);
     } else {
       const digit = keyDigit(set.keys[0]);
@@ -2364,7 +2488,34 @@ function toggleLinks() {
 
 function updateLinksToggle() {
   const btn = document.getElementById('btn-links');
-  if (btn) { btn.classList.toggle('active', showLinks); btn.textContent = showLinks ? 'Links' : 'Links off'; }
+  // The label stays "Links" — the switch carries the state. (Setting textContent here would also
+  // wipe the .switch span, since it's a child of the button.)
+  if (btn) { btn.classList.toggle('active', showLinks); btn.setAttribute('aria-pressed', String(showLinks)); }
+}
+
+// ── Dark mode ──────────────────────────────────────────────────────────────
+// Manual opt-in only. data-theme flips the CSS chrome; refreshVizColors swaps the JS viz palette.
+// Colours are resolved and STORED on each truth/cover when it's created, so re-derive those too,
+// then re-render (buildGrid clears inline badge styles, the rest repaints with the new colours).
+function toggleTheme() {
+  theme = theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = theme;
+  refreshVizColors();
+  for (const t of userTruths) t.color = truthTypeColor(t);
+  if (lastCheck && lastCheck.covers)
+    for (const c of lastCheck.covers)
+      c.color = (c.isCellTruth || c.unit < 18) ? LINK_LINE_GRAY : truthTypeColor(c);
+  buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel(); buildLegend();
+  updateThemeToggle();
+}
+
+function updateThemeToggle() {
+  const btn = document.getElementById('btn-theme');
+  if (!btn) return;
+  const dark = theme === 'dark';
+  btn.textContent = dark ? '☀' : '☾';
+  btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  btn.setAttribute('aria-pressed', String(dark));
 }
 
 // Opacity (0–100) of the big given/solved digits, via a CSS variable.
