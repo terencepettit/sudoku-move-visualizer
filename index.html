@@ -2212,13 +2212,15 @@ function renderTruthSVG() {
       // segs (grid) drive drop-target search; routes (pixel) are handed to renderLinkTubes, which
       // merges collinear runs and draws clean tubes + flowing T-junctions.
       const segs = [], routes = [];
-      // A tube's pixel lane is its grid row/col plus the digit's third-of-cell offset (digits 1-3 sit
-      // in the top/left third of a cell, 4-6 the middle, 7-9 the bottom/right). So two links of
-      // different digits on the same row/col render in different lanes and never stack. Overlap is
-      // scored per lane, not per bare row/col, so only tubes that would truly render on the same line
-      // count. (Perpendicular crossings are different-orientation, so they never count either.)
-      const hLane = row => row * 3 + ((digit - 1) / 3 | 0);   // horizontal (constant-y) lane
-      const vLane = col => col * 3 + (digit - 1) % 3;          // vertical (constant-x) lane
+      // buildGrid nudges every candidate off its 3×3 track so that all nine digits get distinct,
+      // evenly-spaced x and y within a cell — which is precisely what stops two different digits'
+      // lines from ever sharing a lane. So a tube's lane is just its grid row/column plus its digit:
+      // two segments can only stack when they are the SAME digit on the same row/column. Scoring per
+      // lane (not per bare row/col) therefore never counts different-digit lines, which by
+      // construction can't touch. (Perpendicular crossings differ in orientation, so they're never
+      // counted either.) Only lane equality is tested, so any key injective in (row|col, digit) works.
+      const hLane = row => row * 9 + (digit - 1);   // horizontal (constant-y) lane
+      const vLane = col => col * 9 + (digit - 1);   // vertical (constant-x) lane
       // `straight` marks a position-independent straight link segment (only these seed pass 1); a
       // T-junction stub or an L-route arm passes false. Pass 1 gathers the straights; pass 2 registers
       // everything that isn't a straight (straights are already in the registry from the seed).
@@ -2318,7 +2320,7 @@ function renderTruthSVG() {
   for (const t of userTruths) {
     if (t.isCellTruth) continue;                         // cell truths render as squares, not lines
     const d = keyDigit(t.keys[0]);
-    const hL = r => r * 3 + ((d - 1) / 3 | 0), vL = c => c * 3 + (d - 1) % 3;
+    const hL = r => r * 9 + (d - 1), vL = c => c * 9 + (d - 1);   // lane = row|col + digit (see hLane)
     const push = (r1, c1, r2, c2) => {
       if (r1 === r2) truthSegs.push({ horiz: true,  lane: hL(r1), lo: Math.min(c1, c2), hi: Math.max(c1, c2) });
       else if (c1 === c2) truthSegs.push({ horiz: false, lane: vL(c1), lo: Math.min(r1, r2), hi: Math.max(r1, r2) });
