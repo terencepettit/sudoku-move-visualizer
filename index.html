@@ -1175,20 +1175,42 @@ function _checkMoveImpl() {
   const isRelevant = k => baseKeySet.has(k) || elimSet.has(k);
   const relCount = c => c.keys.reduce((n, k) => n + (isRelevant(k) ? 1 : 0), 0);
   const boxUnitOf = cell => 18 + Math.floor(cellRow(cell) / 3) * 3 + Math.floor(cellCol(cell) / 3);
+  // The line (row/column) unit a set of candidates all share, or null if they span 2D.
+  const lineUnitOf = rel => {
+    const cells = rel.map(keyCell);
+    if (new Set(cells.map(cellRow)).size === 1) return cellRow(cells[0]);        // row units: 0-8
+    if (new Set(cells.map(cellCol)).size === 1) return 9 + cellCol(cells[0]);    // col units: 9-17
+    return null;
+  };
+  // Two mirrored redundancy rules. They're applied in sequence — never independently — because when
+  // the linked candidates are BOTH collinear and inside one box, each rule would drop the other's
+  // link and the candidates would end up with no link at all. Running (1) first and having (2) only
+  // consider box links that survived it resolves the tie in favour of the row/column link.
   const toLinks = coverSet => {
     const all = new Set(coverSet);
     for (const c of linkingCovers) all.add(c);
     const list = [...all].filter(c => relCount(c) >= 2);
-    // A row/column link whose linked candidates (the truths + eliminations it actually connects)
-    // all lie in a single box is redundant with that box's link — drop it and show only the box
-    // link (when the box link, covering those same candidates, is also present).
-    return list.filter(c => {
+    // (1) A box link whose linked candidates all lie on one line degenerates into exactly that line —
+    // it shows nothing the row/column link doesn't. Drop it and keep the row/column link. So a box
+    // link survives only when it spans 2D, i.e. when it shows a relationship a line can't.
+    const kept = list.filter(c => {
+      if (c.type === 'cell' || c.unit < 18) return true;         // cell / row / column links: keep
+      const rel = c.keys.filter(isRelevant);
+      const lineUnit = lineUnitOf(rel);
+      if (lineUnit === null) return true;                        // spans 2D: a genuine box link
+      const lineLinkPresent = list.some(b => b !== c && b.unit === lineUnit && rel.every(k => b.keySet.has(k)));
+      return !lineLinkPresent;
+    });
+    // (2) A row/column link whose linked candidates (the truths + eliminations it actually connects)
+    // all lie in a single box is redundant with that box's link — drop it and show only the box link.
+    // Only a box link that survived (1) counts, so the two rules can't both fire on the same pair.
+    return kept.filter(c => {
       if (c.type === 'cell' || c.unit >= 18) return true;        // cell / box links: keep
       const rel = c.keys.filter(isRelevant);
       const boxes = new Set(rel.map(k => boxUnitOf(keyCell(k))));
       if (boxes.size !== 1) return true;                          // linked candidates span >1 box: keep
       const boxUnit = [...boxes][0];
-      const boxLinkPresent = list.some(b => b !== c && b.unit === boxUnit && rel.every(k => b.keySet.has(k)));
+      const boxLinkPresent = kept.some(b => b !== c && b.unit === boxUnit && rel.every(k => b.keySet.has(k)));
       return !boxLinkPresent;
     }).map(coverToLink);
   };
@@ -1211,10 +1233,20 @@ function _checkMoveImpl() {
       statusMsg = `✓ Valid (rank-${r}) — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} via truth forcing chains.`;
       resultObj = { covers: toLinks(byM.get(minM).coverUnion), elims: allElims, rank: r, assignmentCount: null };
     } else {
-      // No exhaustive covering (the DFS was skipped for a large truth set, or the
-      // rank exceeds its depth). Fall back to a fast greedy cover for display only —
-      // the eliminations still come from the forcing-chain engine.
-      const gc = greedyCover(baseKeySet, potCovers);
+      // No exhaustive covering (the DFS was skipped for a large truth set, or the rank exceeds its
+      // depth). Solve the display covering exactly instead — a minimum-cardinality set cover — so the
+      // links shown are a genuine minimal covering rather than a greedy approximation that surfaces
+      // redundant links. Greedy stays as the safety net if the exact search runs out of budget.
+      // The eliminations still come from the forcing-chain engine either way.
+      // The linking covers are displayed regardless (they explain the eliminations), so let them
+      // count toward the covering and search only for the minimum ADDITIONAL covers needed on top.
+      // Otherwise the search picks a cover for a candidate a linking cover already handles, and both
+      // get shown — the second one looking redundant.
+      const freeKeys = new Set();
+      for (const c of linkingCovers) for (const k of c._baseKeys) freeKeys.add(k);
+      const need = new Set([...baseKeySet].filter(k => !freeKeys.has(k)));
+      const ex = exactMinCover(need, potCovers);
+      const gc = ex.complete ? ex : greedyCover(baseKeySet, potCovers);
       const links = gc.complete ? toLinks(gc.covers) : [];
       const covers = links.length ? links : null;
       statusMsg = `✓ Valid — ${allElims.length} elimination${allElims.length !== 1 ? 's' : ''} via truth forcing chains${covers ? ' (cover shown)' : ''}.`;
@@ -1274,6 +1306,74 @@ function greedyCover(baseKeys, potCovers) {
     for (const k of best._baseKeys) remaining.delete(k);
   }
   return { covers: chosen, complete: remaining.size === 0 };
+}
+
+// Exact minimum-cardinality covering of the truth candidates. Covers may overlap, so this is
+// minimum SET COVER (not exact cover) — NP-hard in general, but these instances are tiny (tens of
+// candidates, tens of covers) and branch-and-bound with the right branching settles them fast.
+//
+// greedyCover is myopic and picks a demonstrably worse covering: it takes whichever cover kills the
+// most candidates right now (a whole column of 7s, say) where one cell cover would have served two
+// different truths at once — so it needs an extra cover and surfaces redundant links.
+//
+// Branch on the uncovered candidate with the FEWEST remaining options: every covering must cover it,
+// so trying each of its covers is exhaustive, and the small branching factor prunes hard. Bound with
+// ceil(uncovered / biggest cover) against the best found so far. Covers whose base keys are a subset
+// of another's are dropped up front — swapping in the superset is always at least as good, so an
+// optimal solution never needs them.
+//
+// Returns { covers, complete, optimal }: complete = a full covering was found; optimal = it was
+// proven minimal (false if the node budget ran out first, in which case the caller uses greedy).
+function exactMinCover(baseKeySet, potCovers, nodeBudget = 2_000_000) {
+  const usable = potCovers.filter(c => c._baseKeys.length > 0);
+  const pool = usable.filter((c, i) => !usable.some((o, j) => {
+    if (i === j) return false;
+    if (!c._baseKeys.every(k => o.keySet.has(k))) return false;   // c's base keys ⊄ o's
+    return o._baseKeys.length > c._baseKeys.length || j < i;      // o strictly bigger, or the earlier twin
+  }));
+  const optsFor = new Map();
+  for (const k of baseKeySet) {
+    // Biggest covers first: finding a small covering early makes the bound bite sooner.
+    const opts = pool.filter(c => c.keySet.has(k)).sort((a, b) => b._baseKeys.length - a._baseKeys.length);
+    if (!opts.length) return { covers: [], complete: false, optimal: false };   // uncoverable candidate
+    optsFor.set(k, opts);
+  }
+  const maxSize = pool.reduce((m, c) => Math.max(m, c._baseKeys.length), 1);
+
+  // Greedy is a valid covering, so use it as the starting upper bound — the bound then prunes from
+  // the very first node instead of after the search has blundered to some first solution.
+  const seed = greedyCover(baseKeySet, pool);
+  let best = seed.complete ? seed.covers.slice() : null;
+
+  const remaining = new Set(baseKeySet);
+  const chosen = [];
+  let nodes = 0, budgetOut = false;
+
+  const dfs = () => {
+    if (budgetOut) return;
+    if (++nodes > nodeBudget) { budgetOut = true; return; }
+    if (!remaining.size) { if (!best || chosen.length < best.length) best = [...chosen]; return; }
+    if (chosen.length + Math.ceil(remaining.size / maxSize) >= (best ? best.length : Infinity)) return;
+    // Most-constrained uncovered candidate. Choosing a cover removes ALL of its base keys from
+    // `remaining`, so every option of a still-uncovered key is unchosen by construction — no
+    // filtering needed here, and none of them can be picked twice.
+    let bOpts = null;
+    for (const k of remaining) {
+      const opts = optsFor.get(k);
+      if (!bOpts || opts.length < bOpts.length) { bOpts = opts; if (opts.length === 1) break; }
+    }
+    for (const c of bOpts) {
+      const newly = [];
+      for (const k of c._baseKeys) if (remaining.has(k)) { remaining.delete(k); newly.push(k); }
+      chosen.push(c);
+      dfs();
+      chosen.pop();
+      for (const k of newly) remaining.add(k);
+      if (budgetOut) return;
+    }
+  };
+  dfs();
+  return { covers: best || [], complete: !!best, optimal: !!best && !budgetOut };
 }
 
 // For each non-base candidate X, assume X is true, propagate Sudoku constraints
@@ -2045,6 +2145,10 @@ function renderTruthSVG() {
     const color = set.color;
 
     if (set.isCellTruth) {
+      // A cell set is a square, not a line — it contributes no segments to plan, so pass 1 must skip
+      // it entirely. Drawing it in both passes would stack two strokes (0.7 over 0.7 → 0.91) and two
+      // fills, making cell links render darker than every other link.
+      if (planningPass) return;
       const el = cellEls[keyCell(set.fromKey)];
       if (!el) return;
       const r = el.getBoundingClientRect();
