@@ -177,6 +177,34 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .btn-secondary { background: transparent; color: var(--n-600); }
 .btn-secondary:hover { background: var(--n-100); color: var(--n-900); }
 
+/* ── Copy dialog ── */
+/* Native <dialog>: gets ::backdrop, Esc-to-close and focus trapping for free. Tokens keep it
+   theme-aware along with everything else. */
+#copy-dialog {
+  border: none;
+  border-radius: 12px;
+  padding: 0;
+  background: var(--n-0);
+  color: var(--n-900);
+  box-shadow: var(--shadow-2);
+  min-width: 320px;
+  max-width: 92vw;
+}
+#copy-dialog::backdrop { background: rgba(0,0,0,0.4); }
+.dlg-head { padding: 15px 18px 4px; font-size: 13.5px; font-weight: 500; }
+.dlg-sub  { padding: 0 18px 10px; font-size: 12px; color: var(--n-500); line-height: 1.55; }
+.dlg-sub b { font-weight: 500; color: var(--n-600); }
+/* Each option is a full-width row, so the whole strip is the hit target. */
+.dlg-opt {
+  display: block; width: 100%; text-align: left;
+  padding: 10px 18px; border-radius: 0;
+  border-top: 1px solid var(--n-150);
+}
+.dlg-opt:hover { background: var(--n-50); }
+.dlg-opt b    { display: block; font-size: 12.5px; font-weight: 500; color: var(--n-900); }
+.dlg-opt span { display: block; font-size: 11.5px; color: var(--n-500); margin-top: 3px; line-height: 1.45; }
+.dlg-foot { display: flex; justify-content: flex-end; padding: 10px 12px 12px; }
+
 /* Icon-only button (theme toggle): square, centred glyph. */
 .btn-icon { padding: 6px; width: 30px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; }
 
@@ -492,8 +520,8 @@ body.highlight-mode .cell { cursor: pointer; }
     placeholder="81-digit string (0=empty)"
     value="000000094760910050090002081070050010000709000080030067240100070010090045900000100">
   <button onclick="loadPuzzle()">Load</button>
-  <button onclick="copyState()"
-    title="Copy the full current state (givens, solved cells, candidates) to the clipboard — paste it back into this box and Load to restore">Copy State</button>
+  <button onclick="openCopyDialog()"
+    title="Copy this puzzle as a string — choose how much to include">Copy Puzzle</button>
   <button onclick="skipBasics()"
     title="Auto-apply the basic techniques (naked/hidden singles, locked candidates, naked/hidden subsets)">Auto-fill Basics</button>
   <span class="sep"></span>
@@ -554,6 +582,26 @@ body.highlight-mode .cell { cursor: pointer; }
 
 <div id="toast"></div>
 
+<dialog id="copy-dialog" aria-label="Copy puzzle">
+  <div class="dlg-head">Copy puzzle</div>
+  <div class="dlg-sub">Each option produces a string you can paste into the box and press <b>Load</b>.</div>
+  <button class="dlg-opt" onclick="copyAs('puzzle')">
+    <b>Copy puzzle string</b>
+    <span>The original given digits only — a fresh, unsolved puzzle.</span>
+  </button>
+  <button class="dlg-opt" onclick="copyAs('state')">
+    <b>Copy current state</b>
+    <span id="dlg-d2">Solved digits and current candidates.</span>
+  </button>
+  <button class="dlg-opt" onclick="copyAs('move')">
+    <b>Copy exact move</b>
+    <span id="dlg-d3">Current state plus the drawn truths.</span>
+  </button>
+  <div class="dlg-foot">
+    <button onclick="document.getElementById('copy-dialog').close()">Cancel</button>
+  </div>
+</dialog>
+
 <script>
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -586,7 +634,7 @@ let undoStack = [];
 // — the column green especially (#00702f is near-black on dark → #3fcf7f) and box brown → amber.
 let theme = 'light';
 const VIZ_THEMES = {
-  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#e5484d' },
+  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#ff0000' },
   dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff6b6b' },
 };
 let TRUTH_COLOR    = VIZ_THEMES.light.cell;   // cell truth / candidate-badge blue
@@ -1009,6 +1057,20 @@ function cellTruthFromClick(cellIdx) {
   const keys = [...cands[cellIdx]].sort((a,b)=>a-b).map(d => candKey(cellIdx, d));
   return { isCellTruth: true, keys, keySet: new Set(keys), sig: keySig(keys),
            label: `Cell ${cellName(cellIdx)}`,
+           fromKey: keys[0], toKey: keys[keys.length - 1] };
+}
+
+// Rebuild a row/column/box truth from (digit, unit) — the form saved in a state string. Built
+// directly rather than via truthFromDrag, which infers the unit from two candidate cells and would
+// pick the wrong one whenever they share more than one (e.g. same box AND same row).
+function truthFromUnit(digit, unit) {
+  if (!(digit >= 1 && digit <= 9) || !(unit >= 0 && unit < 27)) return null;
+  const cells = UNIT_CELLS[unit].filter(i => cands[i].has(digit));
+  if (!cells.length) return null;
+  const keys = cells.map(i => candKey(i, digit));
+  return { isCellTruth: false, digit, unit,
+           keys, keySet: new Set(keys), sig: keySig(keys),
+           label: `${digit} in ${unitName(unit)}`,
            fromKey: keys[0], toKey: keys[keys.length - 1] };
 }
 
@@ -2826,10 +2888,21 @@ function solvePuzzle(givens) {
 // ── Save / restore full puzzle state ────────────────────────────────────────
 // Serialise given digits, solved cells and every cell's candidate set into one string that
 // round-trips through the input + Load. Format: 'SSv1' + digits(81) + solved-flags(81) +
-// candidate bitmasks (81 cells × 2 base-36 chars each).
+// candidate bitmasks (81 cells × 2 base-36 chars each), then an OPTIONAL truths suffix:
+//   'T' followed by one 3-char record per truth —
+//      'C' + cell index (base-36, 2 chars)        → a cell truth
+//      'U' + digit (1-9) + unit index (base-36)   → a row / column / box truth
+// The suffix is omitted entirely when no truths are drawn, so such a string is byte-identical to
+// the old format, and older strings (which simply have no suffix) still load unchanged.
 const STATE_LEN = 4 + 81 + 81 + 162;
 
-function serializeState() {
+// The original puzzle: `given` also holds user-solved digits, so zero out anything in solvedCells
+// to get just the starting givens. Loads through the plain 81-digit path.
+function puzzleString() {
+  return given.map((d, i) => (solvedCells.has(i) ? 0 : d)).join('');
+}
+
+function serializeState(includeTruths = true) {
   const digits = given.join('');
   const solved = Array.from({ length: 81 }, (_, i) => (solvedCells.has(i) ? '1' : '0')).join('');
   const cs = Array.from({ length: 81 }, (_, i) => {
@@ -2837,14 +2910,23 @@ function serializeState() {
     for (const d of cands[i]) mask |= 1 << (d - 1);
     return mask.toString(36).padStart(2, '0');
   }).join('');
-  return 'SSv1' + digits + solved + cs;
+  // Truths are stored by IDENTITY (which cell / which digit+unit), not by their candidate keys, so
+  // they rebuild correctly against the restored candidate grid.
+  const truths = includeTruths ? userTruths.map(t => t.isCellTruth
+    ? 'C' + keyCell(t.fromKey).toString(36).padStart(2, '0')
+    : 'U' + t.digit + t.unit.toString(36)).join('') : '';
+  return 'SSv1' + digits + solved + cs + (truths ? 'T' + truths : '');
 }
 
-async function copyState() {
-  const str = serializeState();
+// ── Copy dialog ─────────────────────────────────────────────────────────────
+// Three progressively richer forms, all of which paste back into the input and load:
+//   puzzle → the original givens (81 digits)
+//   state  → givens + solved digits + every candidate set
+//   move   → the above plus the drawn truths
+async function copyText(str, what) {
   try {
     await navigator.clipboard.writeText(str);
-    setStatus('Puzzle state copied to clipboard.', 'ok');
+    setStatus(`${what} copied to clipboard.`, 'ok');
   } catch (e) {
     // Clipboard unavailable → drop it in the input so the user can copy it manually.
     const inp = document.getElementById('puzzle-input');
@@ -2853,11 +2935,32 @@ async function copyState() {
   }
 }
 
+function openCopyDialog() {
+  // Live counts so it's clear what each option will actually carry.
+  const nSolved = solvedCells.size, nTruths = userTruths.length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  document.getElementById('dlg-d2').textContent =
+    `Solved digits and current candidates — ${plural(nSolved, 'solved cell')}.`;
+  document.getElementById('dlg-d3').textContent = nTruths
+    ? `Current state plus ${plural(nTruths, 'truth')}.`
+    : 'Current state — no truths drawn yet, so same as above.';
+  document.getElementById('copy-dialog').showModal();
+}
+
+function copyAs(kind) {
+  document.getElementById('copy-dialog').close();
+  if (kind === 'puzzle') return copyText(puzzleString(), 'Puzzle string');
+  if (kind === 'state')  return copyText(serializeState(false), 'Current state');
+  return copyText(serializeState(true), 'Exact move');
+}
+
 // Load a state string produced by serializeState(). Returns false (and alerts) if malformed.
 function loadSavedState(str) {
-  if (str.length !== STATE_LEN) { alert('That doesn’t look like a saved-puzzle string.'); return false; }
-  const digits = str.slice(4, 85), solved = str.slice(85, 166), cs = str.slice(166);
+  if (str.length < STATE_LEN) { alert('That doesn’t look like a saved-puzzle string.'); return false; }
+  const digits = str.slice(4, 85), solved = str.slice(85, 166), cs = str.slice(166, STATE_LEN);
+  const suffix = str.slice(STATE_LEN);   // '' (old format) or 'T' + 3 chars per truth
   if (!/^[0-9]{81}$/.test(digits) || !/^[01]{81}$/.test(solved)) { alert('Saved-puzzle string is corrupt.'); return false; }
+  if (suffix && !/^T([CU]..)+$/.test(suffix)) { alert('Saved-puzzle string is corrupt (truths).'); return false; }
   given = Array.from(digits, c => +c);
   solvedCells = new Set();
   for (let i = 0; i < 81; i++) if (solved[i] === '1') solvedCells.add(i);
@@ -2871,9 +2974,22 @@ function loadSavedState(str) {
   userTruths = []; lastCheck = null; selIdx = -1;
   cellColors.fill(null);
   undoStack = []; updateUndoButton();
-  buildGrid(); renderTruthSVG(); renderTruthPanel(); clearCheckResult();
+  // Rebuild the truths now that the candidate grid is in place (their keys derive from it).
+  // Anything that no longer forms a valid truth — a cell down to one candidate, a unit with none
+  // of that digit left — is skipped rather than aborting the whole load.
+  let skipped = 0;
+  for (let i = 1; i + 3 <= suffix.length; i += 3) {   // i starts past the 'T'; no-op when suffix is ''
+    const rec = suffix.slice(i, i + 3);
+    const t = rec[0] === 'C'
+      ? cellTruthFromClick(parseInt(rec.slice(1), 36))
+      : truthFromUnit(+rec[1], parseInt(rec[2], 36));
+    if (t && !userTruths.some(x => x.sig === t.sig)) { t.color = truthTypeColor(t); userTruths.push(t); }
+    else skipped++;
+  }
+  buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel(); clearCheckResult();
   history.replaceState(null, '', '#' + str);
-  setStatus('Saved puzzle loaded.', 'ok');
+  const note = userTruths.length ? ` (${userTruths.length} truth${userTruths.length !== 1 ? 's' : ''} restored${skipped ? `, ${skipped} skipped` : ''})` : '';
+  setStatus('Saved puzzle loaded.' + note, 'ok');
   return true;
 }
 
