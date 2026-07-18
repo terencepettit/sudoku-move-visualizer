@@ -181,6 +181,9 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 /* Native <dialog>: gets ::backdrop, Esc-to-close and focus trapping for free. Tokens keep it
    theme-aware along with everything else. */
 #copy-dialog {
+  /* The `* { margin: 0 }` reset kills the UA's `margin: auto` on <dialog>, which is what centres a
+     modal in the top layer — restore it or the dialog pins to the top-left corner. */
+  margin: auto;
   border: none;
   border-radius: 12px;
   padding: 0;
@@ -582,7 +585,7 @@ body.highlight-mode .cell { cursor: pointer; }
 
 <div id="toast"></div>
 
-<dialog id="copy-dialog" aria-label="Copy puzzle">
+<dialog id="copy-dialog" tabindex="-1" aria-label="Copy puzzle">
   <div class="dlg-head">Copy puzzle</div>
   <div class="dlg-sub">Each option produces a string you can paste into the box and press <b>Load</b>.</div>
   <button class="dlg-opt" onclick="copyAs('puzzle')">
@@ -635,7 +638,7 @@ let undoStack = [];
 let theme = 'light';
 const VIZ_THEMES = {
   light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#ff0000' },
-  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff6b6b' },
+  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff0000' },
 };
 let TRUTH_COLOR    = VIZ_THEMES.light.cell;   // cell truth / candidate-badge blue
 let VIZ_ROW        = VIZ_THEMES.light.row;    // row truth → purple
@@ -2944,7 +2947,13 @@ function openCopyDialog() {
   document.getElementById('dlg-d3').textContent = nTruths
     ? `Current state plus ${plural(nTruths, 'truth')}.`
     : 'Current state — no truths drawn yet, so same as above.';
-  document.getElementById('copy-dialog').showModal();
+  const d = document.getElementById('copy-dialog');
+  d.showModal();
+  // showModal() auto-focuses the first focusable descendant — the first option — and Chrome treats
+  // that as :focus-visible, so it opens with a blue ring on "Copy puzzle string". Move focus to the
+  // dialog itself (tabindex="-1") so nothing looks pre-selected. Esc, the focus trap and Tab rings
+  // all still work; Tab from here lands on the first option with a proper ring.
+  d.focus();
 }
 
 function copyAs(kind) {
@@ -3043,6 +3052,11 @@ window.addEventListener('load', () => {
   buildPalette();
   buildLegend();
   updateModeHint();
+  // Clicking the backdrop dismisses the copy dialog, same as Cancel. A backdrop click targets the
+  // <dialog> element itself, while anything inside targets a child — and since the dialog has no
+  // padding, its children cover the whole interior, so this can't misfire on an option.
+  const copyDlg = document.getElementById('copy-dialog');
+  copyDlg.addEventListener('click', e => { if (e.target === copyDlg) copyDlg.close(); });
   const hash = location.hash.slice(1);
   if (/^SSv1/i.test(hash) || /^[0-9.]{81}$/.test(hash)) {
     document.getElementById('puzzle-input').value = hash;
