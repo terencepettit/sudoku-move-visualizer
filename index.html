@@ -233,15 +233,17 @@ body.highlight-mode #highlight-panel { display: block; }
 #main { flex: 1; min-height: 0; display: flex; gap: 20px; align-items: stretch; }
 #board-col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 /* Flex cell that centers the board and gives fitBoard() the space to scale it into. */
-#board-fit { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+/* Holds the legend AND the board, centred together as one group — so the legend sits right beside
+   the grid rather than pinned to the far edge of the window. fitBoard() subtracts the legend's
+   width when sizing the board into what's left. */
+#board-fit { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 18px; }
 
 /* ── Legend ── */
 /* Sits to the LEFT of the board as a narrow vertical column so the board can use the
    full width/height of the body region. Sections stack top-to-bottom. */
 /* Borderless: a reference key should sit quietly beside the board, not compete with it as a card. */
 #legend {
-  flex: none;
-  align-self: center;               /* vertically centre beside the board */
+  flex: none;                       /* vertical centring comes from #board-fit's align-items */
   max-height: 100%;
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 16px;
@@ -503,11 +505,12 @@ body.highlight-mode .cell { cursor: pointer; }
 @media (max-width: 720px) {
   #main { flex-direction: column; overflow-y: auto; }
   #board-col { flex: none; order: 1; }
-  #board-fit { min-height: 300px; }
-  /* Back to a horizontal strip below the board on narrow screens. */
+  /* Stack the legend UNDER the board (order 2 puts it after grid-wrap) as a horizontal strip,
+     rather than beside it — there isn't the width for a side-by-side pair here. */
+  #board-fit { min-height: 300px; flex-direction: column; }
   #legend { order: 2; align-self: stretch; max-height: none; overflow: visible;
             flex-direction: row; flex-wrap: wrap; gap: 8px 24px; }
-  #side-panel { width: auto; order: 3; }
+  #side-panel { width: auto; order: 2; }
   #truth-section, #link-panel { flex: none; }
   #truth-list, #link-list { overflow: visible; }
 }
@@ -547,9 +550,9 @@ body.highlight-mode .cell { cursor: pointer; }
 </header>
 
 <div id="main">
-  <div id="legend"></div>
   <div id="board-col">
     <div id="board-fit">
+      <div id="legend"></div>
       <div id="grid-wrap">
         <div id="grid"></div>
         <svg id="truth-svg"></svg>
@@ -3038,7 +3041,14 @@ function fitBoard() {
   const fit = document.getElementById('board-fit');
   const wrap = document.getElementById('grid-wrap');
   if (!fit || !wrap) return;
-  const availW = fit.clientWidth, availH = fit.clientHeight;
+  // The legend shares this row with the board, so the board only gets what's left after it.
+  // (Wide layout only — when they stack vertically the legend takes height, not width.) The
+  // legend's width is content-driven and unaffected by the board's zoom, so there's no feedback loop.
+  const legend = document.getElementById('legend');
+  const stacked = getComputedStyle(fit).flexDirection === 'column';
+  const gap = parseFloat(getComputedStyle(fit).gap) || 0;
+  const legendW = (legend && !stacked && legend.offsetParent) ? legend.getBoundingClientRect().width + gap : 0;
+  const availW = fit.clientWidth - legendW, availH = fit.clientHeight;
   if (availW < 2 || availH < 2) return;
   const z = Math.min(1, availW / BOARD_PX, availH / BOARD_PX);
   fitting = true;
