@@ -625,8 +625,12 @@ let showLinks  = true;   // display toggle for the auto-generated cover links
 // Purely cosmetic per-cell background colours. Read only by rendering — never by
 // any solve/check logic. null = no highlight.
 let cellColors = new Array(81).fill(null);
-let paintColor = '#fff59d';   // active highlight colour (null = eraser)
-let paintOp    = null;        // 'paint' | 'erase' for the current drag stroke, else null
+// Declared here (not down in the highlight section) so paintColor can default to the first swatch.
+// It must BE one of these, or no swatch shows as selected and the first click paints an
+// off-palette colour — which is exactly what a stale hard-coded default used to do.
+const HIGHLIGHT_COLORS = ['#fffcd8','#d8eed9','#cfe8fc','#fad0de','#ffeac9','#ead2ee','#ffdce0'];
+let paintColor = HIGHLIGHT_COLORS[0];   // active highlight colour (null = eraser)
+let paintOp    = null;        // 'add' | 'remove' | 'erase' for the current drag stroke, else null
 
 // Undo history — snapshots of the full mutable state captured before each action.
 // Capped at UNDO_LIMIT; cleared (not undoable) when a new puzzle is loaded.
@@ -666,14 +670,16 @@ const LINK_CORNER_R = 4;
 // A cell truth is a *region* marker sitting behind the candidate badges, and its badges are the same
 // blue — so a heavy fill makes them dissolve into it. Keep the fill a tint and let the (full-opacity)
 // border define the region; the solid badges then read clearly on top. Cell LINKS stay fainter still
-// (LINK_FILL_OP) and are grey, so the two remain easy to tell apart.
+// (LINK_CELL_FILL_OP) and are grey, so the two remain easy to tell apart.
 const CELL_TRUTH_FILL_OP = 0.5;
 const CELL_TRUTH_EDGE_OP = 0.9;
-// Single source of truth for link opacity: the tube's coloured edge and its faint interior band.
-// Used by drawTube (line links), the cell-link square, and the legend — they must agree, and
-// previously each hardcoded its own copy.
-const LINK_EDGE_OP = 0.7;
-const LINK_FILL_OP = 0.05;
+// Single source of truth for link opacity, so the grid and the legend can't drift apart.
+// LINK_EDGE_OP  — the coloured 1px edge stroke (every link type).
+// LINK_TUBE_FILL_OP — interior of a row/column/box tube (drawTube + its legend swatch).
+// LINK_CELL_FILL_OP — interior of the hollow cell-link square (kept fainter than the tubes).
+const LINK_EDGE_OP      = 0.7;
+const LINK_TUBE_FILL_OP = 0.1;
+const LINK_CELL_FILL_OP = 0.05;
 
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
@@ -883,8 +889,7 @@ function setMode(m) {
 }
 
 // ── Cell highlight (cosmetic) ────────────────────────────────────────────────
-
-const HIGHLIGHT_COLORS = ['#fffcd8','#d8eed9','#cfe8fc','#fad0de','#ffeac9','#ead2ee','#ffdce0'];
+// (HIGHLIGHT_COLORS is declared up with `paintColor`, which defaults to its first entry.)
 
 // Build the legend explaining badge/line colours & styles (mirrors the render code).
 function buildLegend() {
@@ -897,7 +902,7 @@ function buildLegend() {
     `stroke="${color}" stroke-width="${w}" opacity="0.7"/></svg>`;
   const tube = (color, half) =>
     `<svg width="30" height="18" style="flex-shrink:0">` +
-    `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="${LINK_FILL_OP}"/>` +
+    `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="${LINK_TUBE_FILL_OP}"/>` +
     `<line x1="1" y1="${9 - half}" x2="29" y2="${9 - half}" stroke="${color}" stroke-width="1" opacity="${LINK_EDGE_OP}"/>` +
     `<line x1="1" y1="${9 + half}" x2="29" y2="${9 + half}" stroke="${color}" stroke-width="1" opacity="${LINK_EDGE_OP}"/></svg>`;
   // Cell swatches use the same 30×18 SVG box as the line samples so their labels line up and
@@ -908,7 +913,7 @@ function buildLegend() {
     `stroke-opacity="${CELL_TRUTH_EDGE_OP}" stroke-width="1.5"/></svg>`;
   const sqLink  = (color) =>
     `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="4" ` +
-    `fill="${color}" fill-opacity="${LINK_FILL_OP}" stroke="${color}" stroke-opacity="${LINK_EDGE_OP}" stroke-width="1"/></svg>`;
+    `fill="${color}" fill-opacity="${LINK_CELL_FILL_OP}" stroke="${color}" stroke-opacity="${LINK_EDGE_OP}" stroke-width="1"/></svg>`;
   const badge = (bg, ring) =>
     `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:inset 0 0 0 2px ${ring}` : ''}"></span>`;
   const ROW = VIZ_ROW, COL = VIZ_COL, BOX = VIZ_BOX, CELL = TRUTH_COLOR;
@@ -967,10 +972,32 @@ function setPaintColor(color) {
   buildPalette();
 }
 
+// Cosmetic cell highlight. A cell holds a SET of at most two colours; two of them render as a hard
+// diagonal split (first colour upper-left, second lower-right). null = no highlight.
+function cellBackground(v) {
+  if (!v || !v.length) return '';
+  if (v.length === 1) return v[0];
+  return `linear-gradient(135deg, ${v[0]} 0 50%, ${v[1]} 50% 100%)`;
+}
+
 // Set a single cell's cosmetic colour and update just that node (no full rebuild).
-function paintCell(i, color) {
-  cellColors[i] = color;
-  if (cellEls[i]) cellEls[i].style.background = color || '';
+function paintCell(i, value) {
+  cellColors[i] = value;
+  if (cellEls[i]) cellEls[i].style.background = cellBackground(value);
+}
+
+// Apply the active stroke op to one cell. The op is decided once on mousedown so a drag paints
+// uniformly rather than toggling every cell it crosses. Entries are always replaced with a NEW
+// array and never mutated in place, so the shallow cellColors.slice() in pushUndo stays a valid
+// snapshot for undo.
+function applyPaint(i) {
+  const cur = cellColors[i] || [];
+  let next;
+  if (paintOp === 'erase') next = null;
+  else if (paintOp === 'remove') { const f = cur.filter(c => c !== paintColor); next = f.length ? f : null; }
+  else if (cur.includes(paintColor)) next = cur;                                   // already present
+  else { const a = [...cur, paintColor]; next = a.length > 2 ? a.slice(-2) : a; }  // cap at 2, oldest drops
+  paintCell(i, next);
 }
 
 function clearHighlights() {
@@ -1982,7 +2009,7 @@ function buildGrid() {
     cell.classList.toggle('sel', i === selIdx);
     // Cosmetic highlight sits on the cell background — below digits, candidates
     // and the truth-line SVG overlay. Empty string falls back to the CSS default.
-    cell.style.background = cellColors[i] || '';
+    cell.style.background = cellBackground(cellColors[i]);
 
     if (given[i]) {
       cell.classList.toggle('solved', solvedCells.has(i));
@@ -2161,7 +2188,7 @@ function renderTruthSVG() {
   // narrower link) show through. Badge ends trim back by GAP; a T-junction end (trimStart/trimEnd
   // false) is kept so the tube reaches the line it joins. Segments are axis-aligned.
   function drawTube(pts, color, W, trimStart = true, trimEnd = true, cuts = null) {
-    const GAP = 8, FILL_OP = LINK_FILL_OP, EDGE_OP = LINK_EDGE_OP;
+    const GAP = 8, FILL_OP = LINK_TUBE_FILL_OP, EDGE_OP = LINK_EDGE_OP;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
     // Trim a badge end inward by GAP along its segment direction (skipped for T-junction ends).
@@ -2356,7 +2383,7 @@ function renderTruthSVG() {
       rect.setAttribute('fill', color);
       // Truth: a tint with a crisp border — it marks the region, the badges on top are the content.
       // Link: fainter fill and a lighter 1px border (and grey), so the two never read alike.
-      rect.setAttribute('fill-opacity',   String(dashed ? LINK_FILL_OP : CELL_TRUTH_FILL_OP));
+      rect.setAttribute('fill-opacity',   String(dashed ? LINK_CELL_FILL_OP : CELL_TRUTH_FILL_OP));
       rect.setAttribute('stroke', color);
       rect.setAttribute('stroke-width',   dashed ? '1' : '1.5');
       rect.setAttribute('stroke-opacity', String(dashed ? LINK_EDGE_OP : CELL_TRUTH_EDGE_OP));
@@ -2735,8 +2762,9 @@ function setupDragHandlers() {
       pushUndo();
       // First cell sets the stroke op: clicking a cell already showing the active
       // colour erases it (toggle); otherwise paint. The eraser always erases.
-      paintOp = (paintColor === null || cellColors[i] === paintColor) ? 'erase' : 'paint';
-      paintCell(i, paintOp === 'erase' ? null : paintColor);
+      paintOp = paintColor === null ? 'erase'
+              : (cellColors[i] || []).includes(paintColor) ? 'remove' : 'add';
+      applyPaint(i);
       return;
     }
 
@@ -2792,7 +2820,7 @@ function setupDragHandlers() {
     if (paintOp) {
       const cell = document.elementFromPoint(e.clientX, e.clientY);
       const cellDiv = cell && cell.closest('.cell');
-      if (cellDiv) paintCell(+cellDiv.dataset.idx, paintOp === 'erase' ? null : paintColor);
+      if (cellDiv) applyPaint(+cellDiv.dataset.idx);
     }
   });
 
