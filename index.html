@@ -20,9 +20,13 @@
   --n-50:  #f6f6f4;   /* subtle surface / row hover */
   --n-100: #f0f0ed;   /* segmented track, button hover */
   --n-150: #e6e6e2;   /* dividers, input border */
-  --n-200: #dcdcd7;   /* thin grid lines */
-  --n-300: #bdbdb7;   /* grid border + box separators */
+  --n-200: #dcdcd7;
+  --n-300: #bdbdb7;
   --n-400: #a8a8a1;   /* candidate digits */
+  /* Grid lines get their own tokens so the board can be tuned without moving unrelated chrome
+     (the Links switch, disabled buttons) that also read --n-200 / --n-300. */
+  --grid-thin:  #b7b7b1;   /* thin within-box cell lines */
+  --grid-thick: #939390;   /* box separators + outer border */
   --n-500: #8a8a83;   /* muted text */
   --n-600: #66665f;   /* secondary text */
   --n-800: #33332f;   /* strong text */
@@ -54,6 +58,9 @@
   --n-200: #3a3a42;
   --n-300: #50505a;
   --n-400: #68686f;
+  /* Darker on the dark canvas too (lower luminance = the grid recedes a touch further). */
+  --grid-thin:  #2a2a31;
+  --grid-thick: #393943;
   --n-500: #85858f;
   --n-600: #a6a6ae;
   --n-800: #d2d2ce;
@@ -282,15 +289,15 @@ body.highlight-mode #highlight-panel { display: block; }
   display: inline-grid;
   grid-template-columns: 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
   grid-template-rows:    70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px 3px 70px 1px 70px 1px 70px;
-  background: var(--n-200);           /* thin within-box grid lines */
-  border: 3px solid var(--n-300);     /* outer border, matching the box separators */
+  background: var(--grid-thin);        /* thin within-box grid lines */
+  border: 3px solid var(--grid-thick); /* outer border, matching the box separators */
   border-radius: var(--r-lg);
   overflow: hidden;                   /* clips the corner cells to the radius (SVG overlays are siblings, so unclipped) */
   position: absolute;
   left: 0; top: 0;
 }
 /* Box separators — same weight as the outer border, over the lighter thin-line background. */
-.box-line { background: var(--n-300); }
+.box-line { background: var(--grid-thick); }
 
 .cell {
   width: 70px; height: 70px;
