@@ -1251,12 +1251,22 @@ function _checkMoveImpl() {
     return match(0);
   }
 
-  // Skip rank-0 DFS for large structures: it's exponential and rank-0 with many truths
-  // is practically impossible. checkByTruthAssignment finds the same eliminations.
-  const RANK0_DFS_MAX_TRUTHS = 8;
+  // The covering DFS is exponential (measured ~2.5-3x per added truth, and it deepens too since
+  // MAX_M grows with n), so it needs two guards:
+  //   • a wall-clock budget — the real guard. Cost varies several-fold BETWEEN moves at the same n
+  //     (it tracks the size of the cover universe, not just the truth count), so n alone is a poor
+  //     predictor. _checkMoveImpl runs synchronously, so an unbounded search freezes the page.
+  //   • a truth cap — only to avoid burning the whole budget on sizes that realistically never
+  //     finish, so those fail fast instead of stalling on every check.
+  // The budget is deliberately generous: finishing the search is what earns a real rank label, so
+  // it's worth waiting for. Blowing either guard is safe — the eliminations still come from the
+  // forcing-chain engine, and the covering falls back to exactMinCover (fast, a proven minimum).
+  const RANK0_DFS_MAX_TRUTHS = 20;
+  const RANK0_DFS_BUDGET_MS  = 15000;
   const skipRank0DFS = n > RANK0_DFS_MAX_TRUTHS;
+  const dfsDeadline = performance.now() + RANK0_DFS_BUDGET_MS;
 
-  const MAX_M = n + 3;
+  const MAX_M = n + 6;
   let rank0FoundAtNode = -1;
   let nodes = 0;
   let hitLimit = false;
@@ -1315,6 +1325,10 @@ function _checkMoveImpl() {
 
   function dfs() {
     if (++nodes > 50_000_000) { hitLimit = true; return; }
+    // Time check every 1024 nodes — often enough to bound latency, rare enough that the clock read
+    // doesn't dominate the loop. Unwinds like the node limit: partial results are still usable.
+    if ((nodes & 1023) === 0 && performance.now() > dfsDeadline) { hitLimit = true; return; }
+    if (hitLimit) return;
 
     if (remaining.size === 0) {
       recordCovering();
@@ -1426,7 +1440,7 @@ function _checkMoveImpl() {
     // (2) A row/column link whose linked candidates (the truths + eliminations it actually connects)
     // all lie in a single box is redundant with that box's link — drop it and show only the box link.
     // Only a box link that survived (1) counts, so the two rules can't both fire on the same pair.
-    return kept.filter(c => {
+    const final = kept.filter(c => {
       if (c.type === 'cell' || c.unit >= 18) return true;        // cell / box links: keep
       const rel = c.keys.filter(isRelevant);
       const boxes = new Set(rel.map(k => boxUnitOf(keyCell(k))));
@@ -1434,7 +1448,26 @@ function _checkMoveImpl() {
       const boxUnit = [...boxes][0];
       const boxLinkPresent = kept.some(b => b !== c && b.unit === boxUnit && rel.every(k => b.keySet.has(k)));
       return !boxLinkPresent;
-    }).map(coverToLink);
+    });
+    // (3) Completeness guard. Every truth candidate must end up covered — that's what makes the drawn
+    // set a valid covering. But a filter above can discard the ONLY cover of some candidate: most
+    // often `relCount >= 2` drops a cover that touches just that one relevant candidate, stranding it
+    // with no link at all. Add back the fewest covers needed, greedily taking whichever covers the
+    // most still-uncovered candidates.
+    let missing = [...baseKeySet].filter(k => !final.some(c => c.keySet.has(k)));
+    while (missing.length) {
+      let best = null, bestN = 0;
+      for (const c of all) {
+        if (final.includes(c)) continue;
+        let n = 0;
+        for (const k of missing) if (c.keySet.has(k)) n++;
+        if (n > bestN) { bestN = n; best = c; }
+      }
+      if (!best) break;                       // nothing left can cover the rest — show what we have
+      final.push(best);
+      missing = missing.filter(k => !best.keySet.has(k));
+    }
+    return final.map(coverToLink);
   };
 
   if (allElims.length > 0) {
@@ -1482,7 +1515,7 @@ function _checkMoveImpl() {
   }
 
   if (hitLimit) {
-    setStatus(`Search hit the node limit and no forcing eliminations found.`, 'err');
+    setStatus(`Cover search was cut short (time/node limit) and no forcing eliminations found.`, 'err');
   } else if (minM !== undefined) {
     const minRank = minM - n;
     setStatus(`No rank-0 structure and no forcing eliminations found — needs ${minM} covers for ${n} truths (rank-${minRank}).`, 'err');
