@@ -322,6 +322,12 @@ body.highlight-mode #highlight-panel { display: block; }
 
 .cand {
   display: flex; align-items: center; justify-content: center;
+  /* 14px is already optically centred in the 17px badge (ink sits 3.41px / 3.44px from the edges).
+     Larger sizes are NOT: flex centres the line box, but that box reserves descender space below the
+     baseline that digits never use, so the ink drifts upward — and the error doesn't scale smoothly
+     with font-size because the metrics quantize (0.03px at 14px, 0.75px at 15px, 0.47px at 16px).
+     If this size changes, re-measure and correct with `padding-top` — never `transform`, which
+     buildGrid uses on every .cand for the per-digit lane offsets the link router depends on. */
   font-size: 14px;
   font-weight: 500;
   color: transparent;
@@ -1422,39 +1428,54 @@ function _checkMoveImpl() {
   // the linked candidates are BOTH collinear and inside one box, each rule would drop the other's
   // link and the candidates would end up with no link at all. Running (1) first and having (2) only
   // consider box links that survived it resolves the tie in favour of the row/column link.
+  //
+  // Neither rule DELETES a link: a redundant link is still a genuine cover, so it stays in the LINKS
+  // panel and is only auto-hidden (struck through, eye closed) — one click reveals it. Just the grid
+  // drawing skips it, so the picture stays clean while the panel stays honest about what was found.
   const toLinks = coverSet => {
     const all = new Set(coverSet);
-    for (const c of linkingCovers) all.add(c);
+    // Linking covers exist so no elimination is left visually unexplained — which matters for
+    // forcing-chain eliminations, since no cover of the covering need touch them. But an elimination
+    // the covering ALREADY contains is proven by the covering itself, so adding another cover for it
+    // just layers illustration over proof. Pull one in only for eliminations the covering misses;
+    // on a pure rank-0 move that adds nothing and the drawn links are exactly the proof.
+    const explainedByCovering = k => [...coverSet].some(c => c.keySet.has(k));
+    for (const c of linkingCovers)
+      if (c.keys.some(k => elimSet.has(k) && !explainedByCovering(k))) all.add(c);
     const list = [...all].filter(c => relCount(c) >= 2);
     // (1) A box link whose linked candidates all lie on one line degenerates into exactly that line —
-    // it shows nothing the row/column link doesn't. Drop it and keep the row/column link. So a box
-    // link survives only when it spans 2D, i.e. when it shows a relationship a line can't.
-    const kept = list.filter(c => {
-      if (c.type === 'cell' || c.unit < 18) return true;         // cell / row / column links: keep
+    // it shows nothing the row/column link doesn't. Auto-hide it in favour of the row/column link. So
+    // a box link stays visible only when it spans 2D, i.e. when it shows what a line can't.
+    const hiddenByLine = new Set();
+    for (const c of list) {
+      if (c.type === 'cell' || c.unit < 18) continue;            // cell / row / column links: keep
       const rel = c.keys.filter(isRelevant);
       const lineUnit = lineUnitOf(rel);
-      if (lineUnit === null) return true;                        // spans 2D: a genuine box link
-      const lineLinkPresent = list.some(b => b !== c && b.unit === lineUnit && rel.every(k => b.keySet.has(k)));
-      return !lineLinkPresent;
-    });
+      if (lineUnit === null) continue;                           // spans 2D: a genuine box link
+      if (list.some(b => b !== c && b.unit === lineUnit && rel.every(k => b.keySet.has(k))))
+        hiddenByLine.add(c);
+    }
     // (2) A row/column link whose linked candidates (the truths + eliminations it actually connects)
-    // all lie in a single box is redundant with that box's link — drop it and show only the box link.
-    // Only a box link that survived (1) counts, so the two rules can't both fire on the same pair.
-    const final = kept.filter(c => {
-      if (c.type === 'cell' || c.unit >= 18) return true;        // cell / box links: keep
+    // all lie in a single box is redundant with that box's link — auto-hide it in favour of the box
+    // link. Only a box link that survived (1) counts, so the two rules can't both fire on one pair.
+    const hiddenByBox = new Set();
+    for (const c of list) {
+      if (c.type === 'cell' || c.unit >= 18) continue;           // cell / box links: keep
       const rel = c.keys.filter(isRelevant);
       const boxes = new Set(rel.map(k => boxUnitOf(keyCell(k))));
-      if (boxes.size !== 1) return true;                          // linked candidates span >1 box: keep
+      if (boxes.size !== 1) continue;                            // linked candidates span >1 box: keep
       const boxUnit = [...boxes][0];
-      const boxLinkPresent = kept.some(b => b !== c && b.unit === boxUnit && rel.every(k => b.keySet.has(k)));
-      return !boxLinkPresent;
-    });
-    // (3) Completeness guard. Every truth candidate must end up covered — that's what makes the drawn
-    // set a valid covering. But a filter above can discard the ONLY cover of some candidate: most
-    // often `relCount >= 2` drops a cover that touches just that one relevant candidate, stranding it
-    // with no link at all. Add back the fewest covers needed, greedily taking whichever covers the
-    // most still-uncovered candidates.
-    let missing = [...baseKeySet].filter(k => !final.some(c => c.keySet.has(k)));
+      if (list.some(b => b !== c && !hiddenByLine.has(b) && b.unit === boxUnit && rel.every(k => b.keySet.has(k))))
+        hiddenByBox.add(c);
+    }
+    const autoHidden = new Set([...hiddenByLine, ...hiddenByBox]);
+    // (3) Completeness guard. Every truth candidate must end up covered by a VISIBLE link — that's
+    // what makes the drawn set read as a valid covering. But the steps above can leave a candidate
+    // with no visible cover: most often `relCount >= 2` drops a cover that touches just that one
+    // relevant candidate, stranding it. Add back the fewest covers needed, greedily taking whichever
+    // covers the most still-uncovered candidates. Auto-hidden links don't count — they aren't drawn.
+    const final = [...list];
+    let missing = [...baseKeySet].filter(k => !final.some(c => !autoHidden.has(c) && c.keySet.has(k)));
     while (missing.length) {
       let best = null, bestN = 0;
       for (const c of all) {
@@ -1464,15 +1485,25 @@ function _checkMoveImpl() {
         if (n > bestN) { bestN = n; best = c; }
       }
       if (!best) break;                       // nothing left can cover the rest — show what we have
-      final.push(best);
+      final.push(best);                       // added back precisely to be SEEN, so never auto-hidden
       missing = missing.filter(k => !best.keySet.has(k));
     }
-    return final.map(coverToLink);
+    return final.map(c => {
+      const link = coverToLink(c);
+      // `hidden` is the same flag the eye toggle drives, so revealing one is an ordinary click.
+      // `autoHidden` records WHY, purely to explain itself in the panel tooltip.
+      if (autoHidden.has(c)) { link.hidden = true; link.autoHidden = hiddenByLine.has(c) ? 'row/column' : 'box'; }
+      return link;
+    });
   };
 
   if (allElims.length > 0) {
     const isRank0 = rank0Meta !== null;
-    const hasChains = contrElims.length > 0 || assignElims.length > 0;
+    // "+ forcing chains" should mean the chains CONTRIBUTED, not merely that they ran. They always
+    // run, and on a pure rank-0 move they just re-derive the same eliminations — labelling that as a
+    // combination of engines misrepresents the move. So test for eliminations rank-0 didn't find.
+    const rank0Found = new Set(rank0Elims.map(([c, d]) => candKey(c, d)));
+    const hasChains = [...contrElims, ...assignElims].some(([c, d]) => !rank0Found.has(candKey(c, d)));
     let statusMsg, resultObj;
     if (isRank0) {
       const { count } = rank0Meta;
@@ -2720,6 +2751,11 @@ function renderTruthPanel() {
   links.forEach((link, i) => {
     const item = document.createElement('div');
     item.className = 'truth-item' + (link.hidden ? ' link-off' : '');
+    // A link auto-hidden by the redundancy rules is real, just duplicated by another link over the
+    // same candidates — say which, so a struck-through row reads as tidying rather than an error.
+    if (link.autoHidden)
+      item.title = `Redundant with the ${link.autoHidden} link over the same candidates` +
+                   (link.hidden ? ' — auto-hidden.' : '.');
     item.innerHTML =
       `<span class="link-swatch" style="border:2px dashed ${link.color}"></span>` +
       `<span class="truth-label">${link.label}</span>` +
