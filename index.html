@@ -641,7 +641,7 @@ let paintOp    = null;        // 'add' | 'remove' | 'erase' for the current drag
 
 // Undo history — snapshots of the full mutable state captured before each action.
 // Capped at UNDO_LIMIT; cleared (not undoable) when a new puzzle is loaded.
-const UNDO_LIMIT = 10;
+const UNDO_LIMIT = 20;
 let undoStack = [];
 
 // ── Visualization palette ──────────────────────────────────────────────────
