@@ -15,12 +15,15 @@
    carry meaning, so they're not chrome and must not be re-themed casually. */
 :root {
   /* Neutral ramp, very slightly warm so the purple/green/brown viz colours sit calmly on it */
-  --n-0:   #ffffff;   /* cell face */
-  --n-25:  #fbfbfa;   /* app canvas */
-  --n-50:  #f6f6f4;   /* subtle surface / row hover */
-  --n-100: #f0f0ed;   /* segmented track, button hover */
-  --n-150: #e6e6e2;   /* dividers, input border */
-  --n-200: #dcdcd7;
+  --n-0:   #ffffff;   /* cell face — the board stays white against the grey canvas */
+  --n-25:  #eeeeea;   /* app canvas */
+  /* The canvas is grey, so every chrome surface that sits ON it (row hover, segmented track, button
+     hover) has to be darker than the canvas rather than darker than white — hence this top end is
+     tuned to --n-25, not to --n-0. Keep it strictly descending or hover states collapse into the page. */
+  --n-50:  #e7e7e2;   /* subtle surface / row hover */
+  --n-100: #e0e0da;   /* segmented track, button hover */
+  --n-150: #d5d5ce;   /* dividers, input border */
+  --n-200: #c9c9c2;
   --n-300: #bdbdb7;
   --n-400: #a8a8a1;   /* candidate digits */
   /* Grid lines get their own tokens so the board can be tuned without moving unrelated chrome
