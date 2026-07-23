@@ -251,13 +251,16 @@ body.highlight-mode #highlight-panel { display: block; }
 /* ── Legend ── */
 /* Sits to the LEFT of the board as a narrow vertical column so the board can use the
    full width/height of the body region. Sections stack top-to-bottom. */
-/* Borderless: a reference key should sit quietly beside the board, not compete with it as a card. */
+/* A white card beside the board: white face + subtle border lifts it off the grey canvas. */
 #legend {
   flex: none;                       /* vertical centring comes from #board-fit's align-items */
   max-height: 100%;
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 16px;
-  padding: 4px 2px;
+  padding: 14px;
+  background: var(--n-0);
+  border: 1px solid var(--n-150);
+  border-radius: var(--r-lg);
   font-size: 12px;
   color: var(--n-600);
 }
@@ -423,7 +426,15 @@ body.highlight-mode .cell { cursor: pointer; }
   margin-bottom: 8px;
 }
 
-/* Truths and Links each take a share of the rail's leftover height and scroll internally. */
+/* Truths and Links each take a share of the rail's leftover height and scroll internally.
+   Both are white cards on the grey canvas: the border + white face match the legend, and because
+   box-sizing is border-box the padding and border don't disturb the flex-share height. */
+#truth-section, #link-panel {
+  background: var(--n-0);
+  border: 1px solid var(--n-150);
+  border-radius: var(--r-lg);
+  padding: 12px 14px;
+}
 #truth-section { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
 #truth-list { flex: 1; min-height: 0; overflow-y: auto; }
 #link-panel { display: none; flex: 1 1 0; min-height: 0; flex-direction: column; }  /* shown as flex by renderTruthPanel when links exist */
