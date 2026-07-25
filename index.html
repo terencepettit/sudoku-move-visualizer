@@ -3,9 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <title>Sudoku Move Visualizer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -80,7 +77,7 @@
 
 html, body { height: 100%; }
 body {
-  font-family: 'Roboto', 'Helvetica Neue', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   background: var(--n-25);
   color: var(--n-900);
   overflow: hidden;              /* the page itself never scrolls */
@@ -301,6 +298,14 @@ body.highlight-mode #highlight-panel { display: block; }
   overflow: hidden;                   /* clips the corner cells to the radius (SVG overlays are siblings, so unclipped) */
   position: absolute;
   left: 0; top: 0;
+  /* Tabular lining figures for every digit and pencil-mark: uniform advance width so the candidate
+     3×3s line up column-perfect, all glyphs on the baseline. Inherits to .digit and .cand. This
+     changes horizontal metrics only (not the baseline), so .cand's optical vertical centring stands. */
+  font-variant-numeric: tabular-nums lining-nums;
+  /* Grid numerals use Verdana: its "1" carries a foot serif (horizontal base) + flag, unlike SF's
+     footless 1, and it stays crisp and unambiguous at pencil-mark size. Falls back to the UI stack
+     where Verdana isn't installed. Only the grid overrides the font; the chrome stays on the system font. */
+  font-family: Verdana, Tahoma, Geneva, -apple-system, sans-serif;
 }
 /* Box separators — same weight as the outer border, over the lighter thin-line background. */
 .box-line { background: var(--grid-thick); }
@@ -2487,21 +2492,60 @@ function renderTruthSVG() {
       }
 
       if (!dashed) {
-        // Truth: chain candidates in sorted order, each as a straight / L-routed solid line.
-        // Box truths draw 2px wider than row/column truths.
+        // Truth routing. Row/column truths are collinear (one straight run); box truths span 2D. For a
+        // box truth we route on a SPINE — the row or column holding the most cells, drawn straight — and
+        // connect every off-spine cell to its NEAREST spine cell with an L whose bend sits in the off
+        // cell's own column/row. That keeps the collinear run a single clean line and always takes the
+        // short elbow, instead of chaining cell-index-sorted cells with a fixed elbow that zig-zags to
+        // the far end. Each run is drawn as CONSECUTIVE segments (not one long line) so drawPolyline's
+        // end-trim leaves every candidate badge sitting in a gap. Box truths draw 2px wider.
         const truthW = set.unit >= 18 ? 5.5 : 3.5;
-        const sorted = [...set.keys].sort((a, b) => keyCell(a) - keyCell(b));
-        for (let i = 0; i < sorted.length - 1; i++) {
-          const c1 = keyCell(sorted[i]), c2 = keyCell(sorted[i + 1]);
-          const r1 = Math.floor(c1 / 9), l1 = c1 % 9, r2 = Math.floor(c2 / 9), l2 = c2 % 9;
-          const p1 = ptOf(r1, l1), p2 = ptOf(r2, l2);
-          if (!p1 || !p2) continue;
-          if (r1 !== r2 && l1 !== l2) {
-            const [tr, tl] = r1 <= r2 ? [r1, l1] : [r2, l2];
-            const [br, bl] = r1 <= r2 ? [r2, l2] : [r1, l1];
-            drawPolyline([ptOf(br, bl), [ptOf(br, bl)[0], ptOf(tr, tl)[1]], ptOf(tr, tl)], color, false, truthW);
-          } else {
-            drawPolyline([p1, p2], color, false, truthW);
+        const seg = (a, b) => { const p = ptOf(a[0], a[1]), q = ptOf(b[0], b[1]); if (p && q) drawPolyline([p, q], color, false, truthW); };
+        // L from real cell `a` to real cell `b`. The bend is built from the two REAL endpoint pixels
+        // (never a lookup on the possibly-empty corner cell): vertFirst leaves `a` down its column to
+        // b's row then across; else along a's row to b's column then down. Keeps the corner on the true
+        // candidate lanes even when the corner cell holds no candidate of this digit.
+        const elbow = (a, b, vertFirst) => {
+          const p = ptOf(a[0], a[1]), q = ptOf(b[0], b[1]);
+          if (!p || !q) return;
+          drawPolyline([p, vertFirst ? [p[0], q[1]] : [q[0], p[1]], q], color, false, truthW);
+        };
+        const cells = set.keys.map(kk => { const c = keyCell(kk); return [Math.floor(c / 9), c % 9]; });
+        const rows = new Map(), cols = new Map();
+        for (const [r, c] of cells) { rows.set(r, (rows.get(r) || 0) + 1); cols.set(c, (cols.get(c) || 0) + 1); }
+        const maxRow = Math.max(...rows.values()), maxCol = Math.max(...cols.values());
+
+        if (rows.size === 1 || cols.size === 1) {
+          // Collinear: consecutive straight segments along the shared line.
+          const s = cells.slice().sort((a, b) => rows.size === 1 ? a[1] - b[1] : a[0] - b[0]);
+          for (let i = 0; i < s.length - 1; i++) seg(s[i], s[i + 1]);
+        } else if (maxRow < 2 && maxCol < 2) {
+          // No collinear run (e.g. a 3-cell diagonal): chain nearest-first, each pair an L.
+          const order = [cells[0]], rest = cells.slice(1);
+          while (rest.length) {
+            const last = order[order.length - 1];
+            let bi = 0, bd = Infinity;
+            rest.forEach((c, i) => { const d = Math.abs(c[0] - last[0]) + Math.abs(c[1] - last[1]); if (d < bd) { bd = d; bi = i; } });
+            order.push(rest.splice(bi, 1)[0]);
+          }
+          for (let i = 0; i < order.length - 1; i++) {
+            const a = order[i], b = order[i + 1];
+            if (a[0] === b[0] || a[1] === b[1]) seg(a, b); else elbow(a, b, true);
+          }
+        } else {
+          // Spine = the row or column with the most cells (tie → row).
+          const useRow = maxRow >= maxCol;
+          const spineIdx = [...(useRow ? rows : cols).entries()].sort((x, y) => y[1] - x[1])[0][0];
+          const onSpine = c => (useRow ? c[0] : c[1]) === spineIdx;
+          const spine = cells.filter(onSpine).sort((a, b) => useRow ? a[1] - b[1] : a[0] - b[0]);
+          for (let i = 0; i < spine.length - 1; i++) seg(spine[i], spine[i + 1]);
+          for (const o of cells.filter(c => !onSpine(c))) {
+            let near = spine[0], bd = Infinity;
+            for (const s of spine) { const d = Math.abs(s[0] - o[0]) + Math.abs(s[1] - o[1]); if (d < bd) { bd = d; near = s; } }
+            // Bend in the off cell's own column (row spine) / row (col spine). If it lines up with the
+            // nearest spine cell it's a straight drop; otherwise an L, dropping perpendicular first.
+            const straight = useRow ? o[1] === near[1] : o[0] === near[0];
+            if (straight) seg(o, near); else elbow(o, near, useRow);
           }
         }
         return;
