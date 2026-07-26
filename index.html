@@ -713,6 +713,11 @@ const LINK_EDGE_OP      = 0.7;
 const LINK_TUBE_FILL_OP = 0.1;
 const LINK_CELL_FILL_OP = 0.07;
 
+// Single source of truth for the truth-line stroke, so the grid and the legend can't drift apart.
+// All truth types (row / column / box) draw at the same width and opacity.
+const TRUTH_LINE_W  = 3.5;
+const TRUTH_LINE_OP = 0.8;
+
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
   if (truth.isCellTruth) return TRUTH_COLOR;        // blue
@@ -925,13 +930,13 @@ function setMode(m) {
 
 // Build the legend explaining badge/line colours & styles (mirrors the render code).
 function buildLegend() {
-  // Mirrors the render code exactly, reading the same opacity constants so the key can't drift from
-  // the board. Truth line: 3.5px solid @ 0.7. Truth cell: filled square (fill 0.7) with a 1px border.
+  // Mirrors the render code exactly, reading the same shared constants (TRUTH_LINE_W / TRUTH_LINE_OP,
+  // the link opacities) so the key can't drift from the board. Truth cell: filled square + 1px border.
   // Link tube: a faint fill band with a 1px coloured edge either side, half-width 2 for row/col and
   // 4 for box (so a box nests outside a line). Link cell: 1px-bordered square. Squares round to rx 4.
-  const line = (color, w = 3.5) =>
+  const line = (color, w = TRUTH_LINE_W) =>
     `<svg width="30" height="18" style="flex-shrink:0"><line x1="1" y1="9" x2="29" y2="9" ` +
-    `stroke="${color}" stroke-width="${w}" opacity="0.7"/></svg>`;
+    `stroke="${color}" stroke-width="${w}" opacity="${TRUTH_LINE_OP}"/></svg>`;
   const tube = (color, half) =>
     `<svg width="30" height="18" style="flex-shrink:0">` +
     `<rect x="1" y="${9 - half}" width="28" height="${2 * half}" fill="${color}" opacity="${LINK_TUBE_FILL_OP}"/>` +
@@ -960,7 +965,7 @@ function buildLegend() {
       <div class="legend-title">Truths — solid</div>
       <div class="legend-row">${line(ROW)} Row</div>
       <div class="legend-row">${line(COL)} Column</div>
-      <div class="legend-row">${line(BOX, 5.5)} Box</div>
+      <div class="legend-row">${line(BOX)} Box</div>
       <div class="legend-row">${sqTruth(CELL)} Cell</div>
     </div>
     <div class="legend-section">
@@ -2490,9 +2495,9 @@ function renderTruthSVG() {
       // Pass 1 only plans routes (to gather forced segments); it draws nothing.
       if (!planningPass) {
         const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        // Truth lines draw at 0.8; link tubes stay at group-opacity 1 and get their faintness from
-        // their own per-element tube opacities (so the two aren't compounded).
-        group.setAttribute('opacity', isLink ? '1' : '0.8');
+        // Truth lines draw at TRUTH_LINE_OP; link tubes stay at group-opacity 1 and get their faintness
+        // from their own per-element tube opacities (so the two aren't compounded).
+        group.setAttribute('opacity', isLink ? '1' : String(TRUTH_LINE_OP));
         svg.appendChild(group);
         lineTarget = group;
       }
@@ -2504,7 +2509,7 @@ function renderTruthSVG() {
         // two parallel runs get bridged by one short link between them (a clean staircase) rather than
         // one run being force-fitted onto the other with a long L. Box truths draw 2px wider; each edge
         // is its own drawPolyline so end-trim leaves every candidate badge sitting in a gap.
-        const truthW = set.unit >= 18 ? 5.5 : 3.5;
+        const truthW = TRUTH_LINE_W;   // all truth types (row / column / box) draw at the same width
         const seg = (a, b) => { const p = ptOf(a[0], a[1]), q = ptOf(b[0], b[1]); if (p && q) drawPolyline([p, q], color, truthW); };
         // L between two real cells. The bend is built from the two REAL endpoint pixels (never a lookup
         // on the possibly-empty corner cell): vertFirst leaves `a` down its column to b's row then across;
