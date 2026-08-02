@@ -2258,7 +2258,9 @@ function renderTruthSVG() {
   // GAP is just under the badge half-width (17px badge → 8.5px) so lines meet the edge.
   // Solid line for truths (row/column/box). Links no longer use this — they render as tubes via
   // drawTube — so this only ever draws solid, unbroken strokes with rounded elbows.
-  function drawPolyline(pts, color, width = 3.5) {
+  // trimStart/trimEnd pull an end back by GAP so it clears the badge there; a T-junction arm passes
+  // trimEnd=false so it reaches (and butts against) the line it joins instead of stopping short.
+  function drawPolyline(pts, color, width = TRUTH_LINE_W, trimStart = true, trimEnd = true) {
     const GAP = 8;
     const p = pts.map(a => [a[0], a[1]]);
     const n = p.length;
@@ -2267,8 +2269,8 @@ function renderTruthSVG() {
       const len = Math.hypot(dx, dy);
       if (len > GAP) { p[from][0] += dx / len * GAP; p[from][1] += dy / len * GAP; }
     };
-    trim(0, 1);          // start end → toward next point
-    trim(n - 1, n - 2);  // finish end → toward previous point
+    if (trimStart) trim(0, 1);          // start end → toward next point
+    if (trimEnd)   trim(n - 1, n - 2);  // finish end → toward previous point
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', roundedPath(p, LINK_CORNER_R));   // rounded elbows (matches cell-square rx)
     path.setAttribute('fill', 'none');
@@ -2530,22 +2532,36 @@ function renderTruthSVG() {
           }
           edges.push([bi, rest[bk]]); inTree.push(rest[bk]); rest.splice(bk, 1);
         }
-        // Straight edges are the truth's runs. A non-collinear edge picks the elbow whose two arms lie
-        // on those runs — so the bend extends an existing line (e.g. down a column to the end of a row)
-        // rather than jutting a stub into the middle of the box.
+        // Straight edges are the truth's runs (with their extent). A non-collinear edge picks the elbow
+        // whose two arms lie on those runs — so the bend extends an existing line rather than jutting a
+        // stub into the box. And when the chosen bend's spine arm actually lands ON a run, the corner is
+        // really a T-junction: draw only the perpendicular arm, straight into the line, no rounded corner.
         const runs = [];
         for (const [i, j] of edges) {
           const a = cells[i], b = cells[j];
-          if (a[0] === b[0]) runs.push({ h: true, i: a[0] });
-          else if (a[1] === b[1]) runs.push({ h: false, i: a[1] });
+          if (a[0] === b[0]) runs.push({ h: true,  line: a[0], lo: Math.min(a[1], b[1]), hi: Math.max(a[1], b[1]) });
+          else if (a[1] === b[1]) runs.push({ h: false, line: a[1], lo: Math.min(a[0], b[0]), hi: Math.max(a[0], b[0]) });
         }
-        const onRun = (h, i) => runs.some(r => r.h === h && r.i === i) ? 1 : 0;
+        const onRun = (h, line) => runs.some(r => r.h === h && r.line === line) ? 1 : 0;
+        // Does a run on this line actually cover position `at` (so a perpendicular would truly meet it)?
+        const runCovers = (h, line, at) => runs.some(r => r.h === h && r.line === line && r.lo <= at && at <= r.hi);
+        const tArm = (b, junction) => {   // perpendicular arm from cell b to the junction on the run
+          const p = ptOf(b[0], b[1]);
+          if (p) drawPolyline([p, junction], color, truthW, true, false);   // don't trim the run end
+        };
         for (const [i, j] of edges) {
           const a = cells[i], b = cells[j];
           if (a[0] === b[0] || a[1] === b[1]) { seg(a, b); continue; }
           const scoreV = onRun(false, a[1]) + onRun(true, b[0]);   // vertical-first: col a, row b
           const scoreH = onRun(true, a[0]) + onRun(false, b[1]);   // horizontal-first: row a, col b
-          elbow(a, b, scoreV >= scoreH);
+          const vertFirst = scoreV >= scoreH;
+          const pa = ptOf(a[0], a[1]), pb = ptOf(b[0], b[1]);
+          if (vertFirst && pa && pb && runCovers(false, a[1], b[0]))       // T: horizontal arm into the column
+            tArm(b, [pa[0], pb[1]]);
+          else if (!vertFirst && pa && pb && runCovers(true, a[0], b[1]))  // T: vertical arm into the row
+            tArm(b, [pb[0], pa[1]]);
+          else
+            elbow(a, b, vertFirst);
         }
         return;
       }
