@@ -358,6 +358,10 @@ body.draw-mode .cand.present { cursor: crosshair; }
 body.draw-mode .cand.present:hover { background: var(--n-100); color: var(--n-900); }
 body.draw-mode .cell { cursor: crosshair; }
 
+body.unique-mode .cell { cursor: crosshair; }
+/* A cell tentatively marked as part of a deadly pattern (before Enter commits it). */
+.cell.unique-pending { box-shadow: inset 0 0 0 3px #db2777; background: rgba(219,39,122,0.07); }
+
 /* In highlight mode, cells show a paint cursor */
 body.highlight-mode .cell { cursor: pointer; }
 
@@ -567,6 +571,8 @@ body.highlight-mode .cell { cursor: pointer; }
     <button id="btn-edit" class="mode-btn active" onclick="setMode('edit')">Edit</button>
     <button id="btn-draw" class="mode-btn" onclick="setMode('draw')">Draw Truths</button>
     <button id="btn-highlight" class="mode-btn" onclick="setMode('highlight')">Highlight</button>
+    <button id="btn-unique" class="mode-btn" onclick="setMode('unique')"
+      title="Mark a locked / deadly pattern: click its cells, then press Enter">Locked Pattern</button>
   </div>
   <span class="sep"></span>
   <button id="btn-links" class="btn-toggle active" onclick="toggleLinks()" aria-pressed="true"
@@ -650,6 +656,7 @@ let selIdx     = -1;
 let userMode   = 'edit'; // 'edit' | 'draw' | 'highlight'
 let userTruths = [];     // [{keys, keySet, label, color, fromKey, toKey, isCellTruth}]
 let drawState  = null;   // {fromKey} while drag is in progress
+let pendingUnique = new Set();   // cells being marked as a deadly pattern (Unique Rect mode)
 let lastCheck  = null;   // last checkMove result
 let solution   = null;   // null if puzzle has no unique solution, else 81-digit array
 let showLinks  = true;   // display toggle for the auto-generated cover links
@@ -676,8 +683,8 @@ let undoStack = [];
 // — the column green especially (#00702f is near-black on dark → #3fcf7f) and box brown → amber.
 let theme = 'light';
 const VIZ_THEMES = {
-  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#ff0000' },
-  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff0000' },
+  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#ff0000', unique:'#db2777' },
+  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff0000', unique:'#f472b6' },
 };
 let TRUTH_COLOR    = VIZ_THEMES.light.cell;   // cell truth / candidate-badge blue
 let VIZ_ROW        = VIZ_THEMES.light.row;    // row truth → purple
@@ -685,10 +692,11 @@ let VIZ_COL        = VIZ_THEMES.light.col;    // column truth → green
 let VIZ_BOX        = VIZ_THEMES.light.box;    // box truth/link → brown (amber in dark)
 let LINK_LINE_GRAY = VIZ_THEMES.light.link;   // row/column LINKS render grey (box links keep VIZ_BOX)
 let ELIM_COLOR     = VIZ_THEMES.light.elim;   // eliminated candidate badge
+let VIZ_UNIQUE     = VIZ_THEMES.light.unique; // deadly-rectangle (uniqueness) marker → pink
 function refreshVizColors() {
   const v = VIZ_THEMES[theme];
   TRUTH_COLOR = v.cell; VIZ_ROW = v.row; VIZ_COL = v.col; VIZ_BOX = v.box;
-  LINK_LINE_GRAY = v.link; ELIM_COLOR = v.elim;
+  LINK_LINE_GRAY = v.link; ELIM_COLOR = v.elim; VIZ_UNIQUE = v.unique;
 }
 // Link "tube" half-widths (perpendicular distance from centre-line to each coloured edge),
 // per unit type. A row link is always horizontal and a column link always vertical, so the two
@@ -718,8 +726,18 @@ const LINK_CELL_FILL_OP = 0.07;
 const TRUTH_LINE_W  = 3.5;
 const TRUTH_LINE_OP = 0.8;
 
+// Deadly-pattern cell outline (uniqueness marker): faint pink fill + a pink border, inset from the
+// cell edge. Shared by the board renderer and the legend so the two can't drift.
+const UNIQUE_FILL_OP = 0.07;
+const UNIQUE_EDGE_OP = 0.85;
+const UNIQUE_EDGE_W  = 2;
+// Path inset from the cell edge. The 2px stroke straddles the path, so its OUTER edge sits
+// (UNIQUE_INSET − UNIQUE_EDGE_W/2) = 1px inside the cell border.
+const UNIQUE_INSET   = 2;
+
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
+  if (truth.isUnique)    return VIZ_UNIQUE;         // deadly-rectangle marker → pink
   if (truth.isCellTruth) return TRUTH_COLOR;        // blue
   if (truth.unit < 9)   return VIZ_ROW;             // row → purple
   if (truth.unit < 18)  return VIZ_COL;             // col → green
@@ -916,7 +934,9 @@ function setMode(m) {
   document.getElementById('btn-edit').classList.toggle('active', m === 'edit');
   document.getElementById('btn-draw').classList.toggle('active', m === 'draw');
   document.getElementById('btn-highlight').classList.toggle('active', m === 'highlight');
+  document.getElementById('btn-unique').classList.toggle('active', m === 'unique');
   document.body.className = m + '-mode';
+  if (m !== 'unique' && pendingUnique.size) { pendingUnique.clear(); updateUniquePending(); }
   updateModeHint();
   // Deselect cell when switching away from edit
   if (m !== 'edit') {
@@ -951,9 +971,13 @@ function buildLegend() {
   const sqLink  = (color) =>
     `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="4" ` +
     `fill="${color}" fill-opacity="${LINK_CELL_FILL_OP}" stroke="${color}" stroke-opacity="${LINK_EDGE_OP}" stroke-width="1"/></svg>`;
+  // Deadly-pattern cell: a pink rounded outline with a faint fill (mirrors the board's UNIQUE_* values).
+  const sqUnique = (color) =>
+    `<svg width="30" height="18" style="flex-shrink:0"><rect x="8.5" y="2.5" width="13" height="13" rx="3" ` +
+    `fill="${color}" fill-opacity="${UNIQUE_FILL_OP}" stroke="${color}" stroke-opacity="${UNIQUE_EDGE_OP}" stroke-width="${UNIQUE_EDGE_W}"/></svg>`;
   const badge = (bg, ring) =>
     `<span class="lg-badge" style="background:${bg}${ring ? `;box-shadow:inset 0 0 0 2px ${ring}` : ''}"></span>`;
-  const ROW = VIZ_ROW, COL = VIZ_COL, BOX = VIZ_BOX, CELL = TRUTH_COLOR;
+  const ROW = VIZ_ROW, COL = VIZ_COL, BOX = VIZ_BOX, CELL = TRUTH_COLOR, UNIQUE = VIZ_UNIQUE;
   document.getElementById('legend').innerHTML = `
     <div class="legend-section">
       <div class="legend-title">Candidates</div>
@@ -967,6 +991,7 @@ function buildLegend() {
       <div class="legend-row">${line(COL)} Column</div>
       <div class="legend-row">${line(BOX)} Box</div>
       <div class="legend-row">${sqTruth(CELL)} Cell</div>
+      <div class="legend-row">${sqUnique(UNIQUE)} Locked pattern</div>
     </div>
     <div class="legend-section">
       <div class="legend-title">Links — bordered</div>
@@ -1144,6 +1169,97 @@ function truthFromUnit(digit, unit) {
            fromKey: keys[0], toKey: keys[keys.length - 1] };
 }
 
+const candRef = k => cellName(keyCell(k)) + '#' + keyDigit(k);
+
+// The three units (row, column, box) a cell belongs to.
+const cellUnits = c => [Math.floor(c / 9), 9 + (c % 9), 18 + Math.floor(Math.floor(c / 9) / 3) * 3 + Math.floor((c % 9) / 3)];
+
+// Given a marked set of cells (a locked / deadly / uniqueness pattern), derive the "extras ≥1" strong
+// link the engine consumes. A digit that appears in only ONE marked cell can't be part of a locked core
+// (it has no partner to permute with or be constrained against), so those candidates are the escape —
+// the EXTRAS. The rest form the CORE. We then enumerate the core's own fillings (one core candidate per
+// cell, no two pattern cells in a unit sharing a digit) and accept the pattern when the all-core state
+// is either impossible or non-unique:
+//   • 0 core fillings          → the core can't be placed at all → ≥1 extra by PURE LOGIC (locked set).
+//   • ≥2 interchangeable fills → the core would give ≥2 solutions → ≥1 extra by UNIQUENESS (deadly).
+//   • exactly 1               → the core is uniquely placeable → no deduction.
+// Returns { extras:[keys], mode:'logic'|'unique' } or { err }. Recomputed live, so it also drives reload.
+function deadlyExtras(cellList) {
+  const cells = [...cellList];
+  if (cells.length < 4) return { err: 'Mark at least 4 cells — a locked pattern needs a rectangle or larger.' };
+  if (cells.some(c => given[c] || cands[c].size < 2)) return { err: 'Every pattern cell must be unsolved.' };
+  const units = cells.map(cellUnits), candList = cells.map(c => [...cands[c]]);
+  // Enumerate every INTERNAL filling once (one candidate per cell, no two pattern cells sharing a unit
+  // hold the same digit). All later tests just filter this list, so we only pay the enumeration once.
+  const F = [], used = new Set(), asg = new Array(cells.length); let capped = false;
+  (function bt(i) {
+    if (capped) return;
+    if (i === cells.length) { F.push(asg.slice()); if (F.length > 10000) capped = true; return; }
+    for (const d of candList[i]) {
+      let ok = true; for (const u of units[i]) if (used.has(u + ':' + d)) { ok = false; break; }
+      if (!ok) continue;
+      for (const u of units[i]) used.add(u + ':' + d); asg[i] = d;
+      bt(i + 1);
+      for (const u of units[i]) used.delete(u + ':' + d);
+      if (capped) return;
+    }
+  })(0);
+  if (capped) return { err: 'Pattern too large / unconstrained to analyse.' };
+  if (!F.length) return { err: 'These cells can’t be filled consistently — not a valid pattern.' };
+  const key = (k, d) => k * 10 + d;
+  const sig = f => { const m = new Map();
+    for (let k = 0; k < cells.length; k++) for (const u of units[k]) { if (!m.has(u)) m.set(u, new Set()); m.get(u).add(f[k]); }
+    return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([u, s]) => u + ':' + [...s].sort((a, b) => a - b).join('')).join('|'); };
+  const coreOk = Eset => { for (let k = 0; k < cells.length; k++) { let n = 0; for (const d of candList[k]) if (!Eset.has(key(k, d))) n++; if (n < 2) return false; } return true; };
+  const coreFills = Eset => F.filter(f => { for (let k = 0; k < cells.length; k++) if (Eset.has(key(k, f[k]))) return false; return true; });
+  // Every core filling must have an interchangeable partner (its signature group ≥2), so ANY all-core
+  // solution would force a second one — otherwise a lone core filling could be the real (unique) answer.
+  const allPaired = fills => { const g = new Map(); for (const f of fills) g.set(sig(f), (g.get(sig(f)) || 0) + 1); for (const v of g.values()) if (v < 2) return false; return fills.length >= 2; };
+
+  // DEADLY PATH — the core is the candidates that take part in some interchangeable (≥2-signature)
+  // family; the extras are everything else (any number of them, so multi-extra rectangles work).
+  const groups = new Map(); for (const f of F) { const s = sig(f); (groups.get(s) || groups.set(s, []).get(s)).push(f); }
+  const coreUsed = new Set();
+  for (const g of groups.values()) if (g.length >= 2) for (const f of g) for (let k = 0; k < cells.length; k++) coreUsed.add(key(k, f[k]));
+  if (coreUsed.size) {
+    const Eset = new Set(), extras = [];
+    for (let k = 0; k < cells.length; k++) for (const d of candList[k]) if (!coreUsed.has(key(k, d))) { Eset.add(key(k, d)); extras.push(candKey(cells[k], d)); }
+    if (extras.length && coreOk(Eset) && allPaired(coreFills(Eset))) return { extras: extras.sort((a, b) => a - b), mode: 'unique' };
+  }
+
+  // LOGIC PATH — the minimal escape set whose removal makes the core IMPOSSIBLE (0 fillings). Logic
+  // patterns carry few extras, so a small search suffices; tie-break toward the rarer digits.
+  const cand = []; for (let k = 0; k < cells.length; k++) for (const d of candList[k]) cand.push([k, d]);
+  const digitCount = new Map(); for (const c of cells) for (const d of cands[c]) digitCount.set(d, (digitCount.get(d) || 0) + 1);
+  const rarity = E => E.reduce((s, [, d]) => s + digitCount.get(d), 0);
+  const combos = (arr, k) => { const res = []; (function rec(s, acc) { if (acc.length === k) { res.push(acc.slice()); return; }
+    for (let i = s; i < arr.length; i++) { acc.push(arr[i]); rec(i + 1, acc); acc.pop(); } })(0, []); return res; };
+  for (let size = 1; size <= 3; size++) {
+    let best = null, bestR = Infinity;
+    for (const E of combos(cand, size)) {
+      const Eset = new Set(E.map(([k, d]) => key(k, d)));
+      if (coreOk(Eset) && coreFills(Eset).length === 0) { const r = rarity(E); if (r < bestR) { bestR = r; best = E; } }
+    }
+    if (best) return { extras: best.map(([k, d]) => candKey(cells[k], d)).sort((a, b) => a - b), mode: 'logic' };
+  }
+  return { err: 'These cells don’t form a locked or deadly pattern.' };
+}
+
+// Build the uniqueness truth (the extras ≥1 set) from a marked cell set. Returns { truth } or { err }.
+// Recomputed from the current candidate grid, so it also drives reload.
+function uniqueTruthFromCells(cellList) {
+  const res = deadlyExtras(cellList);
+  if (res.err) return res;
+  const cells = [...cellList].sort((a, b) => a - b);
+  const keys = res.extras;
+  const kind = res.mode === 'logic' ? 'Locked' : 'Uniqueness';   // logic (impossible core) vs uniqueness (deadly)
+  return { truth: {
+    isUnique: true, cells, keys, keySet: new Set(keys), sig: 'Q' + cells.join('_'),
+    label: keys.length === 1 ? `${kind} ⇒ ${candRef(keys[0])}` : `${kind} (≥1 of ${keys.map(candRef).join(', ')})`,
+    fromKey: keys[0], toKey: keys[keys.length - 1]
+  } };
+}
+
 // Shared re-render after any truth/link mutation.
 function refreshSets() {
   lastCheck = null;
@@ -1178,6 +1294,7 @@ function removeTruth(idx) {
 function clearAll() {
   pushUndo();
   userTruths = [];
+  if (pendingUnique.size) { pendingUnique.clear(); updateUniquePending(); }
   refreshSets();
   setStatus('Truths cleared.', 'info');
 }
@@ -2462,6 +2579,25 @@ function renderTruthSVG() {
   function renderSet(set, isLink) {
     const color = set.color;
 
+    if (set.isUnique) {
+      // Deadly pattern: outline each marked cell (any shape — rectangle, unique loop, …). It's a region
+      // marker (the assumption), not a candidate line, so it draws once and contributes nothing to pass 1.
+      if (planningPass) return;
+      const pad = UNIQUE_INSET;
+      for (const cell of set.cells) {
+        const el = cellEls[cell]; if (!el) continue;
+        const b = el.getBoundingClientRect();
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', b.left - wrap.left + pad); rect.setAttribute('y', b.top - wrap.top + pad);
+        rect.setAttribute('width', b.width - 2 * pad); rect.setAttribute('height', b.height - 2 * pad);
+        rect.setAttribute('rx', '6');
+        rect.setAttribute('fill', color); rect.setAttribute('fill-opacity', String(UNIQUE_FILL_OP));
+        rect.setAttribute('stroke', color); rect.setAttribute('stroke-width', String(UNIQUE_EDGE_W)); rect.setAttribute('stroke-opacity', String(UNIQUE_EDGE_OP));
+        svg.appendChild(rect);
+      }
+      return;
+    }
+
     if (set.isCellTruth) {
       // A cell set is a square, not a line — it contributes no segments to plan, so pass 1 must skip
       // it entirely. Drawing it in both passes would stack two strokes (0.7 over 0.7 → 0.91) and two
@@ -2710,12 +2846,13 @@ function renderTruthSVG() {
     for (const s of straightSegs) linkSegRegistry.push(s);
     for (const s of truthSegs) linkSegRegistry.push(s);
   }
-  // Pass 2: draw in z-order (cell truths behind; links; box truths; row/col truths on top).
+  // Pass 2: draw in z-order (deadly rectangles behind; cell truths; links; box truths; row/col on top).
+  for (const truth of userTruths) if (truth.isUnique) renderSet(truth, false);
   for (const truth of userTruths) if (truth.isCellTruth) renderSet(truth, false);
   if (showLinks)
     for (const link of ((lastCheck && lastCheck.covers) || [])) if (!link.hidden) renderSet(link, true);
-  for (const truth of userTruths) if (!truth.isCellTruth && truth.unit >= 18) renderSet(truth, false);
-  for (const truth of userTruths) if (!truth.isCellTruth && truth.unit < 18) renderSet(truth, false);
+  for (const truth of userTruths) if (!truth.isCellTruth && !truth.isUnique && truth.unit >= 18) renderSet(truth, false);
+  for (const truth of userTruths) if (!truth.isCellTruth && !truth.isUnique && truth.unit < 18) renderSet(truth, false);
 }
 
 // Toggle visibility of the auto-generated cover links on the grid.
@@ -2771,7 +2908,7 @@ function updateDragLine(toClientX, toClientY) {
   svg.innerHTML = '';
   if (!drawState) return;
 
-  const p1 = candCenter(drawState.fromKey);
+  const p1 = drawState.fromCell != null ? cellCenter(drawState.fromCell) : candCenter(drawState.fromKey);
   if (!p1) return;
 
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
@@ -2781,7 +2918,7 @@ function updateDragLine(toClientX, toClientY) {
   const x2 = toClientX - wrap.left;
   const y2 = toClientY - wrap.top;
 
-  const nextColor = TRUTH_COLOR;
+  const nextColor = drawState.fromCell != null ? VIZ_UNIQUE : TRUTH_COLOR;
 
   const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   line.setAttribute('x1', p1[0]); line.setAttribute('y1', p1[1]);
@@ -2886,11 +3023,26 @@ function clearChecking() {
 const MODE_HINTS = {
   edit:      'Edit — click a candidate to remove it, or click a cell and press 1–9 to place a digit.',
   draw:      'Draw Truths — drag between two candidates to add a truth, or click a cell for a cell-truth.',
-  highlight: 'Highlight — pick a colour, then click or drag across cells to shade them.'
+  highlight: 'Highlight — pick a colour, then click or drag across cells to shade them.',
+  unique:    'Locked Pattern — click the cells of a locked or deadly pattern (rectangle, loop, locked set, …), then press Enter to add the strong-link truth.'
 };
 function updateModeHint() {
   const el = document.getElementById('mode-hint');
   if (el) el.textContent = MODE_HINTS[userMode] || '';
+}
+
+// Reflect the in-progress deadly-pattern selection: outline the marked cells and, in the hint, report
+// whether they form a valid pattern (and its extras) so the user knows when Enter will create a truth.
+function updateUniquePending() {
+  document.querySelectorAll('.cell.unique-pending').forEach(el => el.classList.remove('unique-pending'));
+  for (const c of pendingUnique) { const el = cellEls[c]; if (el) el.classList.add('unique-pending'); }
+  const el = document.getElementById('mode-hint');
+  if (!el) return;
+  if (!pendingUnique.size) { updateModeHint(); return; }
+  const n = pendingUnique.size, res = deadlyExtras(pendingUnique);
+  el.textContent = res.err
+    ? `Locked pattern — ${n} cell${n !== 1 ? 's' : ''} marked. ${res.err}`
+    : `Locked pattern (${res.mode === 'logic' ? 'logic' : 'uniqueness'}) — extras ${res.extras.map(candRef).join(', ')}. Press Enter to create the strong-link truth (Esc to clear).`;
 }
 
 // ── Drag event handlers ─────────────────────────────────────────────────────
@@ -2929,6 +3081,13 @@ function setupDragHandlers() {
         if (truth) registerTruth(truth);
         else setStatus('Cell has fewer than 2 candidates — cannot create a cell truth.', 'err');
       }
+      return;
+    }
+
+    if (userMode === 'unique') {
+      e.preventDefault();
+      if (pendingUnique.has(i)) pendingUnique.delete(i); else pendingUnique.add(i);
+      updateUniquePending();   // live status + highlight; Enter creates the truth
       return;
     }
 
@@ -2976,6 +3135,19 @@ function setupDragHandlers() {
   // Stop the paint stroke on release (anywhere)
   document.addEventListener('mouseup', () => { paintOp = null; });
 
+  // Unique-Rect mode: Enter commits the marked deadly pattern into a uniqueness truth; Esc clears it.
+  document.addEventListener('keydown', e => {
+    if (userMode !== 'unique' || !pendingUnique.size) return;
+    if (e.key === 'Enter') {
+      const res = uniqueTruthFromCells(pendingUnique);
+      if (res.err) { setStatus(res.err, 'err'); return; }
+      registerTruth(res.truth);
+      pendingUnique.clear(); updateUniquePending();
+    } else if (e.key === 'Escape') {
+      pendingUnique.clear(); updateUniquePending();
+    }
+  });
+
   // Clicking anywhere outside the grid clears the Edit-mode cell selection
   document.addEventListener('mousedown', e => {
     if (selIdx < 0 || e.target.closest('#grid')) return;
@@ -2986,17 +3158,16 @@ function setupDragHandlers() {
   // Mouseup: complete drag
   document.addEventListener('mouseup', e => {
     if (!drawState) return;
-    const fromKey = drawState.fromKey;
+    const st = drawState;
     drawState = null;
     clearDragLine();
 
     const target = document.elementFromPoint(e.clientX, e.clientY);
-    const candSpan = target && target.closest('.cand.present');
     const cellDiv  = target && target.closest('.cell');
+    const candSpan = target && target.closest('.cand.present');
     if (!candSpan || !cellDiv) return;
-
     const toKey = candKey(+cellDiv.dataset.idx, +candSpan.dataset.val);
-    const truth = truthFromDrag(fromKey, toKey);
+    const truth = truthFromDrag(st.fromKey, toKey);
     if (!truth) {
       setStatus('Invalid drag — candidates must share a unit (same digit) or be in the same cell.', 'err');
       return;
@@ -3095,9 +3266,10 @@ function serializeState(includeTruths = true) {
   }).join('');
   // Truths are stored by IDENTITY (which cell / which digit+unit), not by their candidate keys, so
   // they rebuild correctly against the restored candidate grid.
-  const truths = includeTruths ? userTruths.map(t => t.isCellTruth
-    ? 'C' + keyCell(t.fromKey).toString(36).padStart(2, '0')
-    : 'U' + t.digit + t.unit.toString(36)).join('') : '';
+  const truths = includeTruths ? userTruths.map(t =>
+      t.isUnique   ? 'Q' + t.cells.length.toString(36) + t.cells.map(c => c.toString(36).padStart(2, '0')).join('')
+    : t.isCellTruth ? 'C' + keyCell(t.fromKey).toString(36).padStart(2, '0')
+    :                 'U' + t.digit + t.unit.toString(36)).join('') : '';
   return 'SSv1' + digits + solved + cs + (truths ? 'T' + truths : '');
 }
 
@@ -3149,7 +3321,7 @@ function loadSavedState(str) {
   const digits = str.slice(4, 85), solved = str.slice(85, 166), cs = str.slice(166, STATE_LEN);
   const suffix = str.slice(STATE_LEN);   // '' (old format) or 'T' + 3 chars per truth
   if (!/^[0-9]{81}$/.test(digits) || !/^[01]{81}$/.test(solved)) { alert('Saved-puzzle string is corrupt.'); return false; }
-  if (suffix && !/^T([CU]..)+$/.test(suffix)) { alert('Saved-puzzle string is corrupt (truths).'); return false; }
+  if (suffix && !/^T[0-9A-Za-z]+$/.test(suffix)) { alert('Saved-puzzle string is corrupt (truths).'); return false; }
   given = Array.from(digits, c => +c);
   solvedCells = new Set();
   for (let i = 0; i < 81; i++) if (solved[i] === '1') solvedCells.add(i);
@@ -3160,20 +3332,27 @@ function loadSavedState(str) {
     const mask = parseInt(cs.slice(i * 2, i * 2 + 2), 36) || 0;
     for (let d = 1; d <= 9; d++) if (mask & (1 << (d - 1))) cands[i].add(d);
   }
-  userTruths = []; lastCheck = null; selIdx = -1;
+  userTruths = []; lastCheck = null; selIdx = -1; pendingUnique.clear();
   cellColors.fill(null);
   undoStack = []; updateUndoButton();
   // Rebuild the truths now that the candidate grid is in place (their keys derive from it).
   // Anything that no longer forms a valid truth — a cell down to one candidate, a unit with none
   // of that digit left — is skipped rather than aborting the whole load.
   let skipped = 0;
-  for (let i = 1; i + 3 <= suffix.length; i += 3) {   // i starts past the 'T'; no-op when suffix is ''
-    const rec = suffix.slice(i, i + 3);
-    const t = rec[0] === 'C'
-      ? cellTruthFromClick(parseInt(rec.slice(1), 36))
-      : truthFromUnit(+rec[1], parseInt(rec[2], 36));
+  for (let i = 1; i < suffix.length; ) {   // i starts past the 'T'; type-driven record length
+    const type = suffix[i];
+    let t = null, len = 3;
+    if (type === 'C') t = cellTruthFromClick(parseInt(suffix.slice(i + 1, i + 3), 36));
+    else if (type === 'U') t = truthFromUnit(+suffix[i + 1], parseInt(suffix[i + 2], 36));
+    else if (type === 'Q') {   // 'Q' + N (base36) + N×(2-char cell) → deadly pattern; core recomputed
+      const n = parseInt(suffix[i + 1], 36); len = 2 + 2 * n;
+      const cs = []; for (let j = 0; j < n; j++) cs.push(parseInt(suffix.slice(i + 2 + j * 2, i + 4 + j * 2), 36));
+      t = uniqueTruthFromCells(cs).truth || null;
+    }
+    else break;
     if (t && !userTruths.some(x => x.sig === t.sig)) { t.color = truthTypeColor(t); userTruths.push(t); }
     else skipped++;
+    i += len;
   }
   buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel(); clearCheckResult();
   history.replaceState(null, '', '#' + str);
@@ -3196,6 +3375,7 @@ function loadPuzzle() {
   userTruths  = [];
   lastCheck   = null;
   selIdx      = -1;
+  pendingUnique.clear();
   cellColors.fill(null); // loading a new puzzle clears cosmetic highlights
   undoStack = [];        // a new puzzle is not undoable and resets history
   updateUndoButton();
