@@ -2756,7 +2756,17 @@ function renderTruthSVG() {
           // B: horizontal along bottom's row (br) + vertical up top's column (tc) — corner (tc,br).
           const scoreA = overlapScore(false, vLane(bc), tr, br) + overlapScore(true, hLane(tr), cLo, cHi);
           const scoreB = overlapScore(true, hLane(br), cLo, cHi) + overlapScore(false, vLane(tc), tr, br);
-          if (scoreB < scoreA) {
+          // Tie-break on TURNS (secondary to overlap): prefer the elbow whose arms lie collinear with a
+          // run already drawn for this link, so renderLinkTubes merges them into one bar and the join
+          // sheds a corner. The two arms per option mirror the addSeg calls below. Overlap stays primary —
+          // a turn is never traded for an overlap. (Straight spine edges route first, so their runs show.)
+          const touch = (a1, b1, a2, b2) =>
+            Math.min(Math.max(a1, b1), Math.max(a2, b2)) >= Math.max(Math.min(a1, b1), Math.min(a2, b2)) - 0.5;
+          const hMerge = (row, k1, k2) => segs.some(s => s.horiz && s.rlo === row && touch(k1, k2, s.clo, s.chi));
+          const vMerge = (col, k1, k2) => segs.some(s => s.vert  && s.clo === col && touch(k1, k2, s.rlo, s.rhi));
+          const mergesA = vMerge(bc, tr, br) + hMerge(tr, bc, tc);   // A's arms: vert col bc + horiz row tr
+          const mergesB = hMerge(br, bc, tc) + vMerge(tc, tr, br);   // B's arms: horiz row br + vert col tc
+          if (scoreB < scoreA || (scoreB === scoreA && mergesB > mergesA)) {
             routes.push({ pts: [botP, [topP[0], botP[1]], topP], ts: true, te: true });
             addSeg(br, bc, br, tc, botP, false); addSeg(br, tc, tr, tc, topP, false);
           } else {
@@ -2770,10 +2780,47 @@ function renderTruthSVG() {
       };
       const tKeys = set.keys.filter(k => truthKeySet.has(k)).sort((a, b) => keyCell(a) - keyCell(b));
       const eKeys = set.keys.filter(k => elimKeySet.has(k) && !truthKeySet.has(k));
-      for (let i = 0; i < tKeys.length - 1; i++) {
-        const a = keyCell(tKeys[i]), b = keyCell(tKeys[i + 1]);
-        routeCells(Math.floor(a / 9), a % 9, Math.floor(b / 9), b % 9);
+      // Connect the truth-member candidates with an overlap-weighted minimum spanning tree (Prim's).
+      // Edge weight = Manhattan distance (primary) + λ·collinear overlap the edge would add (tiebreak): the
+      // spine is the SHORTEST tree, and among equal-length trees it prefers routes that don't stack on the
+      // links/truths already registered. λ is small enough that overlap only ever breaks a distance tie —
+      // it never lengthens the tree. (This replaces an older cell-index chain, which linked members in
+      // index order and so could join the two farthest-apart cells, sweeping a long diagonal across a box
+      // even when a shorter, overlap-free order existed.) Each chosen edge still flows through routeCells,
+      // so its elbow is independently overlap-scored too. In planning pass 1 the registry is empty, so this
+      // degenerates to a pure-distance MST — same total length, so its straight-segment seed stays valid.
+      const OVERLAP_TIEBREAK = 0.02;
+      // Predicted overlap of routing (r1,c1)-(r2,c2): a straight edge occupies its one lane; an L-edge is
+      // scored at its cheaper elbow, mirroring routeCells' scoreA/scoreB exactly.
+      const edgeOverlap = (r1, c1, r2, c2) => {
+        if (r1 === r2) return overlapScore(true,  hLane(r1), Math.min(c1, c2), Math.max(c1, c2));
+        if (c1 === c2) return overlapScore(false, vLane(c1), Math.min(r1, r2), Math.max(r1, r2));
+        const tr = Math.min(r1, r2), br = Math.max(r1, r2);
+        const tc = r1 <= r2 ? c1 : c2, bc = r1 <= r2 ? c2 : c1;   // top = smaller row (matches routeCells)
+        const cLo = Math.min(c1, c2), cHi = Math.max(c1, c2);
+        return Math.min(
+          overlapScore(false, vLane(bc), tr, br) + overlapScore(true, hLane(tr), cLo, cHi),
+          overlapScore(true,  hLane(br), cLo, cHi) + overlapScore(false, vLane(tc), tr, br));
+      };
+      const edgeWeight = (u, v) => Math.abs(Math.floor(u / 9) - Math.floor(v / 9)) + Math.abs(u % 9 - v % 9)
+        + OVERLAP_TIEBREAK * edgeOverlap(Math.floor(u / 9), u % 9, Math.floor(v / 9), v % 9);
+      const spineNodes = tKeys.map(keyCell);
+      const inTree = spineNodes.slice(0, 1), pending = spineNodes.slice(1), spineEdges = [];
+      while (pending.length) {
+        let bi = -1, bu = -1, bw = Infinity;
+        for (let i = 0; i < pending.length; i++)
+          for (const u of inTree) { const w = edgeWeight(u, pending[i]); if (w < bw) { bw = w; bi = i; bu = u; } }
+        const v = pending.splice(bi, 1)[0];
+        spineEdges.push([bu, v]);
+        inTree.push(v);
       }
+      // Draw straight (0-elbow) edges before L-edges: an L-edge's elbow can then extend an existing
+      // collinear run so the two merge into one bar (see routeCells' turn tie-break), shedding a corner —
+      // whereas an L-edge drawn before the run it should join can't see it and keeps the extra turn.
+      const isStraight = ([u, v]) => Math.floor(u / 9) === Math.floor(v / 9) || u % 9 === v % 9;
+      spineEdges.sort((e1, e2) => (isStraight(e2) ? 1 : 0) - (isStraight(e1) ? 1 : 0));
+      for (const [u, v] of spineEdges)
+        routeCells(Math.floor(u / 9), u % 9, Math.floor(v / 9), v % 9);
       const connected = tKeys.map(keyCell);
       const remaining = eKeys.map(keyCell);
       while (remaining.length && connected.length) {
