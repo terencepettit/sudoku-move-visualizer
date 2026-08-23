@@ -187,7 +187,7 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 /* ── Copy dialog ── */
 /* Native <dialog>: gets ::backdrop, Esc-to-close and focus trapping for free. Tokens keep it
    theme-aware along with everything else. */
-#copy-dialog {
+#copy-dialog, #pattern-dialog {
   /* The `* { margin: 0 }` reset kills the UA's `margin: auto` on <dialog>, which is what centres a
      modal in the top layer — restore it or the dialog pins to the top-left corner. */
   margin: auto;
@@ -200,7 +200,10 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
   min-width: 320px;
   max-width: 92vw;
 }
-#copy-dialog::backdrop { background: rgba(0,0,0,0.4); }
+#copy-dialog::backdrop, #pattern-dialog::backdrop { background: rgba(0,0,0,0.4); }
+/* The picker takes focus itself (so a stray Enter can't commit the first option); it isn't an
+   interactive control, so suppress its focus ring — the option buttons keep their own. */
+#pattern-dialog:focus { outline: none; }
 .dlg-head { padding: 15px 18px 4px; font-size: 13.5px; font-weight: 500; }
 .dlg-sub  { padding: 0 18px 10px; font-size: 12px; color: var(--n-500); line-height: 1.55; }
 .dlg-sub b { font-weight: 500; color: var(--n-600); }
@@ -390,6 +393,28 @@ body.highlight-mode .cell { cursor: pointer; }
   line-height: 1.4;
   min-height: 16px;
   text-align: center;
+}
+
+/* "Singles / Basics to the end" solvability badge — shown under the grid whenever the current
+   position finishes with just those techniques; hidden when the grid still needs chaining. */
+#solve-label {
+  flex: none;
+  align-self: center;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+  border: 1px solid rgba(22, 163, 74, 0.30);
+}
+:root[data-theme="dark"] #solve-label {
+  background: rgba(74, 222, 128, 0.14);
+  color: #6ee7a0;
+  border-color: rgba(74, 222, 128, 0.30);
 }
 
 /* Transient toast for action feedback */
@@ -597,6 +622,7 @@ body.highlight-mode .cell { cursor: pointer; }
         <svg id="drag-svg"></svg>
       </div>
     </div>
+    <div id="solve-label" style="display:none"></div>
     <div id="mode-hint"></div>
   </div>
 
@@ -646,6 +672,15 @@ body.highlight-mode .cell { cursor: pointer; }
   </div>
 </dialog>
 
+<dialog id="pattern-dialog" tabindex="-1" aria-label="Choose locked pattern">
+  <div class="dlg-head">Which locked pattern?</div>
+  <div class="dlg-sub">These cells form <b id="pattern-count">several</b> deadly patterns. Pick the core (the digits that permute) — the escape ≥1-true set is everything else.</div>
+  <div id="pattern-options"></div>
+  <div class="dlg-foot">
+    <button onclick="document.getElementById('pattern-dialog').close()">Cancel</button>
+  </div>
+</dialog>
+
 <script>
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -687,7 +722,7 @@ const VIZ_THEMES = {
   dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff0000', unique:'#f472b6' },
 };
 let TRUTH_COLOR    = VIZ_THEMES.light.cell;   // cell truth / candidate-badge blue
-let VIZ_ROW        = VIZ_THEMES.light.row;    // row truth → purple
+let VIZ_ROW        = VIZ_THEMES.light.row;    // row truth → magenta/pink
 let VIZ_COL        = VIZ_THEMES.light.col;    // column truth → green
 let VIZ_BOX        = VIZ_THEMES.light.box;    // box truth/link → brown (amber in dark)
 let LINK_LINE_GRAY = VIZ_THEMES.light.link;   // row/column LINKS render grey (box links keep VIZ_BOX)
@@ -923,6 +958,114 @@ function skipBasics() {
   renderTruthPanel();
   renderTruthSVG();
   setStatus('Basics applied.', 'info');
+}
+
+// ── "Singles / Basics to the end" badge ──────────────────────────────────────
+// After any grid change, report whether the position finishes from here using only
+// naked/hidden singles ("Singles to the end"), or the full basic set — singles +
+// locked candidates + naked/hidden subsets, i.e. exactly what Auto-fill Basics applies
+// ("Basics to the end"). Anything harder (needs chaining) shows nothing. All checks run
+// on a throwaway copy of the candidate grid, so the real board is never touched.
+function updateSolveLabel() {
+  const el = document.getElementById('solve-label');
+  if (!el) return;
+  // Nothing to report once the grid is fully solved (every cell placed) — hide the badge.
+  if (given.every(d => d)) { el.style.display = 'none'; return; }
+
+  // Build a working copy: candidate sets + a `placed` set of cells fixed on the board
+  // (givens / user-solved). We mirror skipBasics() line-for-line, using `placed` where it uses
+  // `given`, so the singles pool and the subset pools match it cell-for-cell (crucially, a
+  // subset-created single is "unplaced" and stays in the pool until singles claims it, exactly
+  // as in skipBasics — otherwise a stale candidate misfires a hidden subset into a contradiction).
+  const build = () => {
+    const g = new Array(81), placed = new Set();
+    for (let i = 0; i < 81; i++) {
+      if (given[i]) { g[i] = new Set([+given[i]]); placed.add(i); }
+      else g[i] = new Set(cands[i]);
+    }
+    return { g, placed };
+  };
+  const done = st => st.g.every(s => s.size === 1);
+  // Fix a single: set the cell, mark it placed, strip the digit from every unit-mate.
+  const place = (g, placed, i, d) => {
+    g[i] = new Set([d]); placed.add(i);
+    for (const u of CELL_UNITS[i]) for (const j of UNIT_CELLS[u]) if (j !== i) g[j].delete(d);
+  };
+  // Naked + hidden singles to fixpoint; false on a contradiction (empty cell / a digit with no home).
+  const singles = (g, placed) => {
+    let go = true;
+    while (go) {
+      go = false;
+      for (let i = 0; i < 81; i++) {
+        if (g[i].size === 0) return false;
+        if (g[i].size === 1 && !placed.has(i)) { place(g, placed, i, [...g[i]][0]); go = true; }
+      }
+      for (let u = 0; u < 27; u++) for (let d = 1; d <= 9; d++) {
+        const cells = UNIT_CELLS[u].filter(i => g[i].has(d));
+        if (cells.length === 0) return false;
+        if (cells.length === 1 && !placed.has(cells[0])) { place(g, placed, cells[0], d); go = true; }
+      }
+    }
+    return true;
+  };
+  // Full basics: singles + locked candidates + naked/hidden subsets — a mirror of skipBasics().
+  const basics = (g, placed) => {
+    let progress = true;
+    while (progress) {
+      progress = false;
+      if (!singles(g, placed)) return false;
+
+      // Locked candidates (pointing / claiming).
+      for (let u = 0; u < 27; u++) {
+        const uSet = new Set(UNIT_CELLS[u]);
+        for (let d = 1; d <= 9; d++) {
+          const cells = UNIT_CELLS[u].filter(i => g[i].has(d));
+          if (cells.length < 2) continue;
+          if (u >= 18) {
+            const rows = new Set(cells.map(cellRow));
+            if (rows.size === 1) for (const i of UNIT_CELLS[[...rows][0]]) if (!uSet.has(i) && g[i].delete(d)) progress = true;
+            const cols = new Set(cells.map(cellCol));
+            if (cols.size === 1) for (const i of UNIT_CELLS[9 + [...cols][0]]) if (!uSet.has(i) && g[i].delete(d)) progress = true;
+          } else {
+            const boxes = new Set(cells.map(cellBox));
+            if (boxes.size === 1) for (const i of UNIT_CELLS[18 + [...boxes][0]]) if (!uSet.has(i) && g[i].delete(d)) progress = true;
+          }
+        }
+      }
+      // Naked subsets.
+      for (let u = 0; u < 27; u++) {
+        const open = UNIT_CELLS[u].filter(i => !placed.has(i) && g[i].size > 0);
+        for (let size = 2; size <= Math.min(5, open.length - 1); size++)
+          for (const subset of combos(open, size)) {
+            const union = new Set(subset.flatMap(i => [...g[i]]));
+            if (union.size === size)
+              for (const i of open) if (!subset.includes(i))
+                for (const d of union) if (g[i].delete(d)) progress = true;
+          }
+      }
+      // Hidden subsets.
+      for (let u = 0; u < 27; u++) {
+        const open = UNIT_CELLS[u].filter(i => !placed.has(i) && g[i].size > 0);
+        const digits = [...new Set(open.flatMap(i => [...g[i]]))];
+        for (let size = 2; size <= Math.min(5, digits.length - 1); size++)
+          for (const ds of combos(digits, size)) {
+            const dsSet = new Set(ds);
+            const cells = open.filter(i => ds.some(d => g[i].has(d)));
+            if (cells.length === size)
+              for (const i of cells) for (const d of [...g[i]])
+                if (!dsSet.has(d) && g[i].delete(d)) progress = true;
+          }
+      }
+    }
+    return true;
+  };
+
+  let text = '';
+  const a = build();
+  if (singles(a.g, a.placed) && done(a)) text = 'Singles to the end';
+  else { const b = build(); if (basics(b.g, b.placed) && done(b)) text = 'Basics to the end'; }
+  el.textContent = text;
+  el.style.display = text ? '' : 'none';
 }
 
 // ── Mode ───────────────────────────────────────────────────────────────────
@@ -1245,19 +1388,118 @@ function deadlyExtras(cellList) {
   return { err: 'These cells don’t form a locked or deadly pattern.' };
 }
 
+// Assemble the uniqueness/locked truth object from a chosen escape set. `core` (the deadly digits) is
+// carried only when the pattern was ambiguous and the user picked one, so the choice serialises faithfully.
+function mkUniqueTruth(cellList, keys, mode, core) {
+  const cells = [...cellList].sort((a, b) => a - b);
+  const kind = mode === 'logic' ? 'Locked' : 'Uniqueness';   // logic (impossible core) vs uniqueness (deadly)
+  return {
+    isUnique: true, cells, keys, keySet: new Set(keys), sig: 'Q' + cells.join('_'),
+    label: keys.length === 1 ? `${kind} ⇒ ${candRef(keys[0])}` : `${kind} (≥1 of ${keys.map(candRef).join(', ')})`,
+    fromKey: keys[0], toKey: keys[keys.length - 1],
+    ...(core ? { core: [...core] } : {})
+  };
+}
+
 // Build the uniqueness truth (the extras ≥1 set) from a marked cell set. Returns { truth } or { err }.
-// Recomputed from the current candidate grid, so it also drives reload.
+// Recomputed from the current candidate grid, so it also drives reload. When the cells admit more than one
+// deadly pattern the caller resolves it via deadlyOptions() + the picker; this single-answer path stands.
 function uniqueTruthFromCells(cellList) {
   const res = deadlyExtras(cellList);
   if (res.err) return res;
-  const cells = [...cellList].sort((a, b) => a - b);
-  const keys = res.extras;
-  const kind = res.mode === 'logic' ? 'Locked' : 'Uniqueness';   // logic (impossible core) vs uniqueness (deadly)
-  return { truth: {
-    isUnique: true, cells, keys, keySet: new Set(keys), sig: 'Q' + cells.join('_'),
-    label: keys.length === 1 ? `${kind} ⇒ ${candRef(keys[0])}` : `${kind} (≥1 of ${keys.map(candRef).join(', ')})`,
-    fromKey: keys[0], toKey: keys[keys.length - 1]
-  } };
+  return { truth: mkUniqueTruth(cellList, res.extras, res.mode) };
+}
+
+// Rebuild a specific disambiguated pattern from its stored core digits (used on reload of a 'D' record).
+function uniqueTruthForCore(cellList, core) {
+  const coreSet = new Set(core);
+  const opt = deadlyOptions(cellList).find(o => o.core.length === core.length && o.core.every(d => coreSet.has(d)));
+  return opt ? { truth: mkUniqueTruth(cellList, opt.extras, opt.mode, opt.core) } : { err: 'core no longer valid' };
+}
+
+// Enumerate every DISTINCT deadly interpretation of a marked cell set: each is a choice of "core" digits
+// (a set the cells can permute among → ≥2 interchangeable fillings), with the remaining candidates as the
+// escape (≥1 extras). A rectangle whose four cells share three digits {2,6,7} yields three cores — {2,6},
+// {2,7}, {6,7} — which is exactly the ambiguity a single auto-answer can't resolve. Returns
+// [{ core:[digits], extras:[keys], mode:'unique' }] (distinct by escape set), or [].
+function deadlyOptions(cellList) {
+  const cells = [...cellList];
+  if (cells.length < 4 || cells.some(c => given[c] || cands[c].size < 2)) return [];
+  const units = cells.map(cellUnits), candList = cells.map(c => [...cands[c]]);
+  const F = [], used = new Set(), asg = new Array(cells.length); let capped = false;
+  (function bt(i) {
+    if (capped) return;
+    if (i === cells.length) { F.push(asg.slice()); if (F.length > 10000) capped = true; return; }
+    for (const d of candList[i]) {
+      let ok = true; for (const u of units[i]) if (used.has(u + ':' + d)) { ok = false; break; }
+      if (!ok) continue;
+      for (const u of units[i]) used.add(u + ':' + d); asg[i] = d;
+      bt(i + 1);
+      for (const u of units[i]) used.delete(u + ':' + d);
+      if (capped) return;
+    }
+  })(0);
+  if (capped || !F.length) return [];
+  const sig = f => { const m = new Map();
+    for (let k = 0; k < cells.length; k++) for (const u of units[k]) { if (!m.has(u)) m.set(u, new Set()); m.get(u).add(f[k]); }
+    return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([u, s]) => u + ':' + [...s].sort((a, b) => a - b).join('')).join('|'); };
+  // A core is deadly iff every one of its fillings has an interchangeable partner (same unit-footprint).
+  const allPaired = fills => { if (fills.length < 2) return false; const g = new Map();
+    for (const f of fills) g.set(sig(f), (g.get(sig(f)) || 0) + 1); for (const v of g.values()) if (v < 2) return false; return true; };
+  const allDigits = [...new Set(candList.flat())].sort((a, b) => a - b);
+  const combos = (arr, k) => { const res = []; (function rec(s, acc) { if (acc.length === k) { res.push(acc.slice()); return; }
+    for (let i = s; i < arr.length; i++) { acc.push(arr[i]); rec(i + 1, acc); acc.pop(); } })(0, []); return res; };
+  const opts = [], seen = new Set();
+  for (let size = 2; size <= Math.min(4, allDigits.length); size++)
+    for (const D of combos(allDigits, size)) {
+      const Dset = new Set(D);
+      if (!cells.every((c, k) => candList[k].filter(d => Dset.has(d)).length >= 2)) continue;   // each cell must keep ≥2 core digits
+      if (!allPaired(F.filter(f => f.every(d => Dset.has(d))))) continue;                        // the core must be deadly
+      const extras = [];
+      for (let k = 0; k < cells.length; k++) for (const d of candList[k]) if (!Dset.has(d)) extras.push(candKey(cells[k], d));
+      if (!extras.length) continue;
+      extras.sort((a, b) => a - b);
+      const es = extras.join(','); if (seen.has(es)) continue; seen.add(es);   // distinct by escape set
+      opts.push({ core: D, extras, mode: 'unique' });
+    }
+  return opts;
+}
+
+// Disambiguation picker: shown when a marked set admits more than one deadly pattern. One row per
+// interpretation (its core digits + the escape it produces); clicking a row commits that pattern.
+let patternChoice = null;   // { cells, opts } while the dialog is open
+function showPatternPicker(cells, opts) {
+  patternChoice = { cells, opts };
+  document.getElementById('pattern-count').textContent = { 2: 'two', 3: 'three', 4: 'four' }[opts.length] || String(opts.length);
+  // Escapes read best grouped by cell, e.g. "r7c8=7,9".
+  const byCell = keys => {
+    const m = new Map();
+    for (const k of keys) { const c = keyCell(k); (m.get(c) || m.set(c, []).get(c)).push(keyDigit(k)); }
+    return [...m.entries()].sort((a, b) => a[0] - b[0])
+      .map(([c, ds]) => cellName(c) + '=' + ds.sort((a, b) => a - b).join(',')).join(', ');
+  };
+  const box = document.getElementById('pattern-options');
+  box.innerHTML = '';
+  opts.forEach((o, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'dlg-opt';
+    btn.innerHTML = `<b>Core ${o.core.join(' · ')}</b><span>escape ≥1 of: ${byCell(o.extras)}</span>`;
+    btn.onclick = () => pickPattern(idx);
+    box.appendChild(btn);
+  });
+  const dlg = document.getElementById('pattern-dialog');
+  dlg.showModal();
+  // showModal() autofocuses the first option; move focus to the (non-actionable) dialog itself so the
+  // same Enter that opened the picker — or a key-repeat of it — can't immediately commit option one.
+  dlg.focus();
+}
+function pickPattern(idx) {
+  document.getElementById('pattern-dialog').close();
+  if (!patternChoice) return;
+  const { cells, opts } = patternChoice; patternChoice = null;
+  const o = opts[idx]; if (!o) return;
+  registerTruth(mkUniqueTruth(cells, o.extras, o.mode, o.core));
+  pendingUnique.clear(); updateUniquePending();
 }
 
 // Shared re-render after any truth/link mutation.
@@ -2243,6 +2485,7 @@ function buildGrid() {
       }
     }
   }
+  updateSolveLabel();
 }
 
 function applyAllHighlights() {
@@ -3186,9 +3429,24 @@ function setupDragHandlers() {
   document.addEventListener('keydown', e => {
     if (userMode !== 'unique' || !pendingUnique.size) return;
     if (e.key === 'Enter') {
-      const res = uniqueTruthFromCells(pendingUnique);
-      if (res.err) { setStatus(res.err, 'err'); return; }
-      registerTruth(res.truth);
+      // When the marked cells admit more than one deadly pattern, ask which core the user means.
+      // deadlyOptions is the primary detector: two-or-more → picker, exactly one → commit it
+      // directly. Only when deadlyOptions finds nothing do we fall back to deadlyExtras, which
+      // still catches a few shapes deadlyOptions doesn't model (e.g. some larger loops). This
+      // ordering matters — deadlyExtras has blind spots (it wrongly rejects some valid partial-core
+      // patterns), so a pattern deadlyOptions confirms must not be second-guessed by it.
+      const cells = [...pendingUnique];
+      const opts = deadlyOptions(cells);
+      if (opts.length >= 2) { showPatternPicker(cells, opts); return; }
+      let truth;
+      if (opts.length === 1) {
+        truth = mkUniqueTruth(cells, opts[0].extras, opts[0].mode, opts[0].core);
+      } else {
+        const res = uniqueTruthFromCells(pendingUnique);
+        if (res.err) { setStatus(res.err, 'err'); return; }
+        truth = res.truth;
+      }
+      registerTruth(truth);
       pendingUnique.clear(); updateUniquePending();
     } else if (e.key === 'Escape') {
       pendingUnique.clear(); updateUniquePending();
@@ -3290,9 +3548,11 @@ function solvePuzzle(givens) {
 // Serialise given digits, solved cells and every cell's candidate set into one string that
 // round-trips through the input + Load. Format: 'SSv1' + digits(81) + solved-flags(81) +
 // candidate bitmasks (81 cells × 2 base-36 chars each), then an OPTIONAL truths suffix:
-//   'T' followed by one 3-char record per truth —
+//   'T' followed by one variable-length record per truth —
 //      'C' + cell index (base-36, 2 chars)        → a cell truth
 //      'U' + digit (1-9) + unit index (base-36)   → a row / column / box truth
+//      'Q' + N + N×(2-char cell)                   → a deadly pattern (core recomputed on load)
+//      'D' + N + N×(2-char cell) + K + K×digit     → a deadly pattern with an explicitly chosen core
 // The suffix is omitted entirely when no truths are drawn, so such a string is byte-identical to
 // the old format, and older strings (which simply have no suffix) still load unchanged.
 const STATE_LEN = 4 + 81 + 81 + 162;
@@ -3313,10 +3573,16 @@ function serializeState(includeTruths = true) {
   }).join('');
   // Truths are stored by IDENTITY (which cell / which digit+unit), not by their candidate keys, so
   // they rebuild correctly against the restored candidate grid.
-  const truths = includeTruths ? userTruths.map(t =>
-      t.isUnique   ? 'Q' + t.cells.length.toString(36) + t.cells.map(c => c.toString(36).padStart(2, '0')).join('')
-    : t.isCellTruth ? 'C' + keyCell(t.fromKey).toString(36).padStart(2, '0')
-    :                 'U' + t.digit + t.unit.toString(36)).join('') : '';
+  const truths = includeTruths ? userTruths.map(t => {
+    if (t.isUnique) {
+      const q = 'Q' + t.cells.length.toString(36) + t.cells.map(c => c.toString(36).padStart(2, '0')).join('');
+      // A disambiguated pattern carries the chosen core, which can't be re-derived from the cells
+      // alone — a 'D' record appends it ('D' + …cells… + K + K digits) so the pick survives reload.
+      return t.core ? 'D' + q.slice(1) + t.core.length.toString(36) + t.core.join('') : q;
+    }
+    return t.isCellTruth ? 'C' + keyCell(t.fromKey).toString(36).padStart(2, '0')
+                         : 'U' + t.digit + t.unit.toString(36);
+  }).join('') : '';
   return 'SSv1' + digits + solved + cs + (truths ? 'T' + truths : '');
 }
 
@@ -3395,6 +3661,14 @@ function loadSavedState(str) {
       const n = parseInt(suffix[i + 1], 36); len = 2 + 2 * n;
       const cs = []; for (let j = 0; j < n; j++) cs.push(parseInt(suffix.slice(i + 2 + j * 2, i + 4 + j * 2), 36));
       t = uniqueTruthFromCells(cs).truth || null;
+    }
+    else if (type === 'D') {   // 'D' + N + N×(2-char cell) + K + K×(1-char digit) → pattern with a chosen core
+      const n = parseInt(suffix[i + 1], 36);
+      const cs = []; for (let j = 0; j < n; j++) cs.push(parseInt(suffix.slice(i + 2 + j * 2, i + 4 + j * 2), 36));
+      const kPos = i + 2 + 2 * n, k = parseInt(suffix[kPos], 36);
+      const core = []; for (let j = 0; j < k; j++) core.push(+suffix[kPos + 1 + j]);
+      len = 2 + 2 * n + 1 + k;
+      t = uniqueTruthForCore(cs, core).truth || null;
     }
     else break;
     if (t && !userTruths.some(x => x.sig === t.sig)) { t.color = truthTypeColor(t); userTruths.push(t); }
