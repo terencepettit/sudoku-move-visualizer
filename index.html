@@ -218,6 +218,25 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .dlg-opt span { display: block; font-size: 11.5px; color: var(--n-500); margin-top: 3px; line-height: 1.45; }
 .dlg-foot { display: flex; justify-content: flex-end; padding: 10px 12px 12px; }
 
+/* ── Pattern-picker previews ── */
+/* Each option renders the marked cells as a mini-grid (collapsed to the pattern's own rows × cols),
+   with escape (≥1-true) candidates highlighted in the uniqueness pink, exactly as they read on the board. */
+#pattern-options { max-height: 62vh; overflow-y: auto; }
+.pp-opt { display: flex; align-items: center; gap: 16px; }
+.pp-label { flex: 0 0 auto; min-width: 66px; font-size: 12.5px; font-weight: 500; color: var(--n-900); }
+.pp-label small { display: block; margin-top: 3px; font-size: 10.5px; font-weight: 400; color: var(--n-500); }
+.pp-grid { display: grid; gap: 3px; margin-left: auto; }
+/* Cell is sized so its 3×3 of candidate slots each comfortably holds one badge — a slot must be a
+   touch wider than the badge, or the pink circles spill over the cell borders. */
+.pp-cell { width: 54px; height: 54px; box-sizing: border-box; border: 1px solid var(--n-200); border-radius: 4px; background: var(--n-0); }
+.pp-cell.empty { border-style: dashed; background: transparent; opacity: 0.4; }
+/* minmax(0,1fr) — not plain 1fr — so each of the 9 slots is exactly a third of the cell; plain 1fr
+   keeps a content-based minimum that lets the three rows total more than the cell height and spill. */
+.pp-cands { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr)); width: 100%; height: 100%; padding: 3px; }
+.pp-cand { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; }
+.pp-cand span { display: flex; align-items: center; justify-content: center; width: 14px; height: 14px; font-size: 9.5px; line-height: 1; color: var(--n-600); }
+.pp-cand.escape span { background: #db2777; color: #fff; border-radius: 50%; font-weight: 600; }
+
 /* Icon-only button (theme toggle): square, centred glyph. */
 .btn-icon { padding: 6px; width: 30px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; }
 
@@ -674,7 +693,7 @@ body.highlight-mode .cell { cursor: pointer; }
 
 <dialog id="pattern-dialog" tabindex="-1" aria-label="Choose locked pattern">
   <div class="dlg-head">Which locked pattern?</div>
-  <div class="dlg-sub">These cells form <b id="pattern-count">several</b> deadly patterns. Pick the core (the digits that permute) — the escape ≥1-true set is everything else.</div>
+  <div class="dlg-sub">These cells form <b id="pattern-count">several</b> deadly patterns. Pick the one you meant — each preview shows the marked cells with its escape (≥1-true) candidates highlighted <b style="color:#db2777">pink</b>.</div>
   <div id="pattern-options"></div>
   <div class="dlg-foot">
     <button onclick="document.getElementById('pattern-dialog').close()">Cancel</button>
@@ -1468,22 +1487,50 @@ function deadlyOptions(cellList) {
 // Disambiguation picker: shown when a marked set admits more than one deadly pattern. One row per
 // interpretation (its core digits + the escape it produces); clicking a row commits that pattern.
 let patternChoice = null;   // { cells, opts } while the dialog is open
+// A miniature of the marked cells for one interpretation: the pattern's own rows × columns (gaps
+// collapsed), each cell showing its pencil-marks, escape candidates drawn as pink badges like the board.
+function patternPreviewEl(cells, o) {
+  const cellSet = new Set(cells);
+  const escSet = new Set(o.extras);
+  const rows = [...new Set(cells.map(i => i / 9 | 0))].sort((a, b) => a - b);
+  const cols = [...new Set(cells.map(i => i % 9))].sort((a, b) => a - b);
+  const grid = document.createElement('div');
+  grid.className = 'pp-grid';
+  grid.style.gridTemplateColumns = `repeat(${cols.length}, auto)`;
+  for (const r of rows) for (const c of cols) {
+    const idx = r * 9 + c;
+    const cell = document.createElement('div');
+    if (!cellSet.has(idx)) { cell.className = 'pp-cell empty'; grid.appendChild(cell); continue; }
+    cell.className = 'pp-cell';
+    const cg = document.createElement('div');
+    cg.className = 'pp-cands';
+    for (let d = 1; d <= 9; d++) {
+      const cd = document.createElement('div');
+      cd.className = 'pp-cand';
+      if (cands[idx].has(d)) {
+        if (escSet.has(candKey(idx, d))) cd.classList.add('escape');
+        cd.innerHTML = `<span>${d}</span>`;
+      }
+      cg.appendChild(cd);
+    }
+    cell.appendChild(cg);
+    grid.appendChild(cell);
+  }
+  return grid;
+}
 function showPatternPicker(cells, opts) {
   patternChoice = { cells, opts };
   document.getElementById('pattern-count').textContent = { 2: 'two', 3: 'three', 4: 'four' }[opts.length] || String(opts.length);
-  // Escapes read best grouped by cell, e.g. "r7c8=7,9".
-  const byCell = keys => {
-    const m = new Map();
-    for (const k of keys) { const c = keyCell(k); (m.get(c) || m.set(c, []).get(c)).push(keyDigit(k)); }
-    return [...m.entries()].sort((a, b) => a[0] - b[0])
-      .map(([c, ds]) => cellName(c) + '=' + ds.sort((a, b) => a - b).join(',')).join(', ');
-  };
   const box = document.getElementById('pattern-options');
   box.innerHTML = '';
   opts.forEach((o, idx) => {
     const btn = document.createElement('button');
-    btn.className = 'dlg-opt';
-    btn.innerHTML = `<b>Core ${o.core.join(' · ')}</b><span>escape ≥1 of: ${byCell(o.extras)}</span>`;
+    btn.className = 'dlg-opt pp-opt';
+    const label = document.createElement('div');
+    label.className = 'pp-label';
+    label.innerHTML = `Core ${o.core.join(' · ')}<small>${o.extras.length} escape${o.extras.length === 1 ? '' : 's'}</small>`;
+    btn.appendChild(label);
+    btn.appendChild(patternPreviewEl(cells, o));
     btn.onclick = () => pickPattern(idx);
     box.appendChild(btn);
   });
