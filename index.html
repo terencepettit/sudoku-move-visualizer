@@ -178,8 +178,8 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .btn-danger:hover { background: var(--danger-bg); color: var(--danger); }
 
 /* Digit-opacity slider */
-#digit-opacity-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--n-500); white-space: nowrap; }
-#digit-opacity { width: 80px; cursor: pointer; accent-color: var(--accent); }
+#digit-opacity-label, #cand-opacity-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--n-500); white-space: nowrap; }
+#digit-opacity, #cand-opacity { width: 80px; cursor: pointer; accent-color: var(--accent); }
 
 .btn-secondary { background: transparent; color: var(--n-600); }
 .btn-secondary:hover { background: var(--n-100); color: var(--n-900); }
@@ -235,7 +235,7 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .pp-cands { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr)); width: 100%; height: 100%; padding: 3px; }
 .pp-cand { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; }
 .pp-cand span { display: flex; align-items: center; justify-content: center; width: 14px; height: 14px; font-size: 9.5px; line-height: 1; color: var(--n-600); }
-.pp-cand.escape span { background: #db2777; color: #fff; border-radius: 50%; font-weight: 600; }
+.pp-cand.escape span { background: #0d9488; color: #fff; border-radius: 50%; font-weight: 600; }
 
 /* Icon-only button (theme toggle): square, centred glyph. */
 .btn-icon { padding: 6px; width: 30px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; }
@@ -369,7 +369,10 @@ body.highlight-mode #highlight-panel { display: block; }
   transition: color 0.1s, background 0.1s;
   user-select: none;
 }
-.cand.present { color: var(--n-600); }
+.cand.present { color: var(--n-600); opacity: var(--cand-opacity, 1); }
+/* The Candidates slider fades plain pencil-marks only; a highlighted (truth) or eliminated candidate
+   is a `.badged` cell and stays fully opaque so the move reads clearly at any candidate opacity. */
+.cand.present.badged { opacity: 1; }
 
 /* In edit mode, candidates show a delete cursor */
 body.edit-mode .cand.present { cursor: pointer; }
@@ -382,7 +385,7 @@ body.draw-mode .cell { cursor: crosshair; }
 
 body.unique-mode .cell { cursor: crosshair; }
 /* A cell tentatively marked as part of a deadly pattern (before Enter commits it). */
-.cell.unique-pending { box-shadow: inset 0 0 0 3px #db2777; background: rgba(219,39,122,0.07); }
+.cell.unique-pending { box-shadow: inset 0 0 0 3px #0d9488; background: rgba(13,148,136,0.09); }
 
 /* In highlight mode, cells show a paint cursor */
 body.highlight-mode .cell { cursor: pointer; }
@@ -513,6 +516,22 @@ body.highlight-mode .cell { cursor: pointer; }
   border-radius: 50%;
   flex-shrink: 0;
 }
+/* Uniqueness patterns get a clickable colour swatch (native picker) so their colour can be overridden. */
+input.truth-swatch {
+  appearance: none; -webkit-appearance: none;
+  width: 13px; height: 13px; padding: 0; margin: 0; border: none;
+  background: none; cursor: pointer;
+}
+input.truth-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+input.truth-swatch::-webkit-color-swatch { border: 1px solid var(--n-300); border-radius: 50%; }
+input.truth-swatch::-moz-color-swatch { border: 1px solid var(--n-300); border-radius: 50%; }
+input.truth-swatch:hover { box-shadow: 0 0 0 2px var(--n-200); border-radius: 50%; }
+/* Reset-to-automatic-colour button, shown only while a pattern's colour is overridden. */
+.truth-reset {
+  padding: 2px 5px; font-size: 12px; line-height: 1; flex-shrink: 0;
+  background: none; color: var(--n-300); border: none; cursor: pointer; border-radius: var(--r-sm);
+}
+.truth-reset:hover { background: var(--n-100); color: var(--n-800); }
 /* Link swatch: hollow ring (dashed line vocabulary) to distinguish from truths */
 .link-swatch {
   width: 10px; height: 10px;
@@ -625,6 +644,10 @@ body.highlight-mode .cell { cursor: pointer; }
     <input id="digit-opacity" type="range" min="0" max="100" value="100"
       oninput="setDigitOpacity(this.value)">
   </label>
+  <label id="cand-opacity-label" title="Opacity of plain candidate pencil-marks — highlighted and eliminated candidates stay fully visible">Candidates
+    <input id="cand-opacity" type="range" min="0" max="100" value="100"
+      oninput="setCandOpacity(this.value)">
+  </label>
   <span class="sep"></span>
   <button id="btn-undo" class="btn-secondary" onclick="undo()" disabled>↶ Undo</button>
   <button id="btn-theme" class="btn-secondary btn-icon" onclick="toggleTheme()" title="Switch to dark mode" aria-label="Toggle dark mode" aria-pressed="false">☾</button>
@@ -693,7 +716,7 @@ body.highlight-mode .cell { cursor: pointer; }
 
 <dialog id="pattern-dialog" tabindex="-1" aria-label="Choose locked pattern">
   <div class="dlg-head">Which locked pattern?</div>
-  <div class="dlg-sub">These cells form <b id="pattern-count">several</b> deadly patterns. Pick the one you meant — each preview shows the marked cells with its escape (≥1-true) candidates highlighted <b style="color:#db2777">pink</b>.</div>
+  <div class="dlg-sub">These cells form <b id="pattern-count">several</b> deadly patterns. Pick the one you meant — each preview shows the marked cells with its escape (≥1-true) candidates highlighted <b style="color:#0d9488">teal</b>.</div>
   <div id="pattern-options"></div>
   <div class="dlg-foot">
     <button onclick="document.getElementById('pattern-dialog').close()">Cancel</button>
@@ -737,8 +760,8 @@ let undoStack = [];
 // — the column green especially (#00702f is near-black on dark → #3fcf7f) and box brown → amber.
 let theme = 'light';
 const VIZ_THEMES = {
-  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#ff0000', unique:'#db2777' },
-  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff0000', unique:'#f472b6' },
+  light: { cell:'#1a7fff', row:'#a020f0', col:'#00702f', box:'#c05800', link:'#757575', elim:'#ff0000', unique:'#0d9488' },
+  dark:  { cell:'#3d8bfd', row:'#c07bf0', col:'#3fcf7f', box:'#e6994d', link:'#9a9aa4', elim:'#ff0000', unique:'#2dd4bf' },
 };
 let TRUTH_COLOR    = VIZ_THEMES.light.cell;   // cell truth / candidate-badge blue
 let VIZ_ROW        = VIZ_THEMES.light.row;    // row truth → magenta/pink
@@ -788,6 +811,8 @@ const UNIQUE_EDGE_W  = 2;
 // Path inset from the cell edge. The 2px stroke straddles the path, so its OUTER edge sits
 // (UNIQUE_INSET − UNIQUE_EDGE_W/2) = 1px inside the cell border.
 const UNIQUE_INSET   = 2;
+// Extra inset per additional pattern sharing a cell, so overlapping outlines nest instead of colliding.
+const UNIQUE_NEST    = 3.5;
 
 // Line color by truth type: col=green, row=purple, box=brown, cell=blue
 function truthTypeColor(truth) {
@@ -796,6 +821,79 @@ function truthTypeColor(truth) {
   if (truth.unit < 9)   return VIZ_ROW;             // row → purple
   if (truth.unit < 18)  return VIZ_COL;             // col → green
   return VIZ_BOX;                                    // box → brown / amber
+}
+
+// When several deadly patterns are drawn at once they overlap and become impossible to tell apart if
+// all pink. Each uniqueness pattern instead takes the next accent in this palette — applied to its cell
+// outlines, its escape badges, and its Truths-panel dot — so cells and escapes are attributable to a
+// pattern at a glance. The first entry is the classic uniqueness pink, so a lone pattern is unchanged.
+// Deliberately no pink / red-adjacent hues here — a uniqueness escape badge must not be confused with
+// the red elimination badge once a move is applied. All accents are cool or clearly-warm-gold instead.
+const UNIQUE_PALETTE = {
+  light: ['#0d9488', '#7c3aed', '#d97706', '#0891b2'],   // teal, violet, amber, cyan
+  dark:  ['#2dd4bf', '#a78bfa', '#fbbf24', '#38bdf8'],
+};
+function uniquePatternColor(idx) {
+  const pal = UNIQUE_PALETTE[theme];
+  return pal[idx % pal.length];
+}
+// Resolve and store every truth's colour. Uniqueness patterns are numbered in userTruths order and
+// take palette accents; all other truth types keep their by-type colour. Must run after any truth
+// add / remove / load and after a theme change, before the renderers read `truth.color`.
+function assignTruthColors() {
+  let u = 0;
+  for (const t of userTruths) {
+    // A uniqueness pattern takes the next palette accent by index — unless the user has picked a colour
+    // for it, in which case that override wins (and stays fixed across theme changes and reindexing).
+    if (t.isUnique) { t._uidx = u; t.color = t.colorOverride || uniquePatternColor(u); u++; }
+    else { t._uidx = -1; t.color = truthTypeColor(t); }
+  }
+}
+// Manually set / clear a uniqueness pattern's colour from its Truths-list swatch. Repaints in place —
+// deliberately NOT via refreshSets, so a Check Move's eliminations stay on screen.
+// livePatternColor runs on every `input` as the picker drags: it recolours the grid but leaves the panel
+// untouched, so the open picker isn't torn out from under the user. setPatternColor runs on `change`
+// (picker committed/closed) and does the full repaint, which reveals the reset button.
+function livePatternColor(i, color) {
+  const t = userTruths[i];
+  if (!t || !t.isUnique) return;
+  t.colorOverride = color;
+  assignTruthColors();
+  applyAllHighlights(); renderTruthSVG();
+}
+function setPatternColor(i, color) {
+  const t = userTruths[i];
+  if (!t || !t.isUnique) return;
+  t.colorOverride = color;
+  assignTruthColors();
+  buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel();
+}
+function resetPatternColor(i) {
+  const t = userTruths[i];
+  if (!t || !t.isUnique) return;
+  delete t.colorOverride;
+  assignTruthColors();
+  buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel();
+}
+
+// Hovering a uniqueness pattern in the Truths list brings it forward and fades the OTHER patterns'
+// outlines and escapes — the on-demand way to answer "which cells/escapes are this one?" when two
+// patterns overlap. Only kicks in when there are ≥2 patterns to disambiguate. Purely cosmetic.
+function focusUniquePattern(truth) {
+  if (userTruths.filter(t => t.isUnique).length < 2) return;
+  document.querySelectorAll('#truth-svg rect[data-uidx]').forEach(r => {
+    r.style.opacity = (+r.dataset.uidx === truth._uidx) ? '1' : '0.1';
+  });
+  // Dim the OTHER patterns' escapes — but keep any the focused pattern also owns (a shared guardian
+  // belongs to this pattern too, so it stays lit and its split badge still reads).
+  const keep = new Set(truth.keys);
+  for (const t of userTruths) if (t.isUnique && t !== truth)
+    for (const k of t.keys) { if (keep.has(k)) continue; const el = candEl(k); if (el) el.style.opacity = '0.18'; }
+}
+function unfocusUniquePattern() {
+  document.querySelectorAll('#truth-svg rect[data-uidx]').forEach(r => (r.style.opacity = ''));
+  for (const t of userTruths) if (t.isUnique)
+    for (const k of t.keys) { const el = candEl(k); if (el) el.style.opacity = ''; }
 }
 
 // ── Geometry ───────────────────────────────────────────────────────────────
@@ -1426,6 +1524,14 @@ function mkUniqueTruth(cellList, keys, mode, core) {
 function uniqueTruthFromCells(cellList) {
   const res = deadlyExtras(cellList);
   if (res.err) return res;
+  // A uniqueness pattern must span EVERY marked cell. deadlyExtras is lenient — it absorbs cells that
+  // only touch the pattern through a shared escape digit (e.g. a 4-cell UR plus two extra cells that
+  // merely share a candidate), padding the escape set. deadlyOptions is strict: it only reports a
+  // pattern when all cells participate in one deadly core, so an empty result on a 'unique' pattern
+  // means some marked cells are hangers-on. Reject those; logic/locked patterns aren't uniqueness, so
+  // they pass straight through.
+  if (res.mode === 'unique' && deadlyOptions(cellList).length === 0)
+    return { err: "These cells don't all belong to one deadly pattern — some aren't part of it. Mark only the pattern's cells." };
   return { truth: mkUniqueTruth(cellList, res.extras, res.mode) };
 }
 
@@ -1552,6 +1658,7 @@ function pickPattern(idx) {
 // Shared re-render after any truth/link mutation.
 function refreshSets() {
   lastCheck = null;
+  assignTruthColors();
   buildGrid();
   applyAllHighlights();
   renderTruthSVG();
@@ -2536,7 +2643,11 @@ function buildGrid() {
 }
 
 function applyAllHighlights() {
+  // Reset the "highlighted / eliminated" marker before re-badging, so a candidate that's no longer a
+  // truth key or elimination goes back to being a plain pencil-mark (and dims with the Candidates slider).
+  document.querySelectorAll('.cand.badged').forEach(el => el.classList.remove('badged'));
   const setBadge = (el, bg, fg) => {
+    el.classList.add('badged');             // exempts it from the Candidates-opacity fade
     el.style.background  = bg;
     el.style.color       = fg;
     el.style.fontWeight  = '500';
@@ -2551,14 +2662,29 @@ function applyAllHighlights() {
     el.style.boxShadow   = '';
   };
 
-  const truthKeySet = new Set(userTruths.flatMap(t => t.keys));
-
-  // Truth candidates → solid blue fill (≥1 true)
+  // Truth candidates → solid fill (≥1 true). Most truths use the generic blue; a uniqueness pattern's
+  // escapes take the pattern's own accent, so overlapping patterns' escapes stay attributable (a shared
+  // cell shows one pattern's escape in teal and the other's in violet). Remember each key's colour so a
+  // cannibalistic elimination can ring itself in its ORIGINAL escape colour rather than a generic blue.
+  // Collect every colour a candidate is asked for: a guardian shared by two uniqueness patterns picks up
+  // both accents, so it renders as a split (two-tone) badge — clearly part of BOTH — rather than letting
+  // whichever truth comes last silently overwrite the other.
+  const keyColors = new Map();
   for (const truth of userTruths)
-    for (const k of truth.keys) { const el = candEl(k); if (el) setBadge(el, TRUTH_COLOR, '#fff'); }
+    for (const k of truth.keys) {
+      const col = truth.isUnique ? truth.color : TRUTH_COLOR;
+      const arr = keyColors.get(k) || keyColors.set(k, []).get(k);
+      if (!arr.includes(col)) arr.push(col);
+    }
+  const keyColor = new Map();   // one colour per key, for the cannibalistic-elim ring below
+  for (const [k, colors] of keyColors) {
+    keyColor.set(k, colors[0]);
+    const el = candEl(k); if (!el) continue;
+    setBadge(el, colors.length === 1 ? colors[0] : splitBadge(colors), '#fff');
+  }
 
-  // Eliminations → red (overrides). A blue ring marks a cannibalistic elim that
-  // was also a truth key. (Non-eliminated link candidates are left untouched.)
+  // Eliminations → red (overrides). A candidate that was also a truth key keeps a ring in that truth's
+  // own colour (its escape colour for a uniqueness pattern), so it still reads as part of its set.
   if (lastCheck) {
     for (const [c, d] of lastCheck.elims) {
       const k = candKey(c, d);
@@ -2567,7 +2693,7 @@ function applyAllHighlights() {
         setBadge(el, ELIM_COLOR, '#fff');
         // `inset` so the ring grows inward — an outward shadow would make this badge visibly
         // larger than every other one.
-        el.style.boxShadow = truthKeySet.has(k) ? `inset 0 0 0 2px ${TRUTH_COLOR}` : '';
+        el.style.boxShadow = keyColor.has(k) ? `inset 0 0 0 2px ${keyColor.get(k)}` : '';
       }
     }
   }
@@ -2575,6 +2701,14 @@ function applyAllHighlights() {
 
 function candEl(k) {
   return candEls[k] || null;
+}
+
+// A candidate that belongs to several coloured sets (a guardian shared by two uniqueness patterns) is
+// painted as equal diagonal bands of each colour, so both patterns are visibly present in the one badge.
+function splitBadge(colors) {
+  const n = colors.length;
+  const stops = colors.map((c, i) => `${c} ${(i * 100 / n).toFixed(1)}% ${((i + 1) * 100 / n).toFixed(1)}%`).join(', ');
+  return `linear-gradient(135deg, ${stops})`;
 }
 
 function candCenter(k) {
@@ -2629,6 +2763,13 @@ function renderTruthSVG() {
   // eliminated candidates it explains. Non-eliminated link candidates are ignored.
   const truthKeySet = new Set(userTruths.flatMap(t => t.keys));
   const elimKeySet  = new Set(((lastCheck && lastCheck.elims) || []).map(([c, d]) => candKey(c, d)));
+
+  // Which uniqueness patterns claim each cell (in draw order), so a cell shared by two patterns can
+  // nest their outlines — each successive owner insets a little further — instead of one hiding the other.
+  const cellToUnique = new Map();
+  for (const t of userTruths) if (t.isUnique) for (const c of t.cells) {
+    (cellToUnique.get(c) || cellToUnique.set(c, []).get(c)).push(t);
+  }
 
   // Two-pass link routing so an L-route's elbow can avoid straight links regardless of draw order.
   // Pass 1 (planningPass) runs the routing for every cover and gathers the *straight* link segments —
@@ -2703,10 +2844,15 @@ function renderTruthSVG() {
     };
     if (trimStart) trim(0, 1);
     if (trimEnd)   trim(n - 1, n - 2);
-    // Left-perpendicular unit of each segment (rotate direction 90°: (dx,dy) → (-dy,dx)).
+    // Left-perpendicular unit of each segment (rotate direction 90°: (dx,dy) → (-dy,dx)). Tube segments
+    // are axis-aligned, but candidate centres carry sub-pixel noise, so the "flat" axis has a tiny
+    // non-zero delta — and Math.sign turns that into a spurious ±1, slanting the offset edge and fanning
+    // the tube open. Snap to the dominant axis so the off-axis delta is treated as exactly zero.
     const perp = [];
     for (let i = 0; i < n - 1; i++) {
-      const dx = Math.sign(p[i + 1][0] - p[i][0]), dy = Math.sign(p[i + 1][1] - p[i][1]);
+      const rdx = p[i + 1][0] - p[i][0], rdy = p[i + 1][1] - p[i][1];
+      const horiz = Math.abs(rdx) >= Math.abs(rdy);
+      const dx = horiz ? Math.sign(rdx) : 0, dy = horiz ? 0 : Math.sign(rdy);
       perp.push([-dy, dx]);
     }
     // Build an offset edge as ONE polyline: each interior vertex is offset by the sum of its two
@@ -2856,6 +3002,32 @@ function renderTruthSVG() {
           : { vert: true,  fixed: endPt[0], lo: endPt[1] - W, hi: endPt[1] + W });
       }
     }
+    // X-crossings: within one link a horizontal tube and a vertical tube can cross at an interior point
+    // of both (e.g. a box link routed as a spine plus a bar that spans across it). Neither is a T-stub, so
+    // the junction code above misses it and the two hollow bands visibly overlap. Cut both walls of each
+    // where the other passes, so the crossing opens into a clean + junction instead of two overlapping tubes.
+    const segList = [];
+    for (const poly of polys)
+      for (let i = 0; i < poly.pts.length - 1; i++) {
+        const a = poly.pts[i], b = poly.pts[i + 1];
+        segList.push({ poly, horiz: near(a[1], b[1]), a, b });
+      }
+    for (const h of segList) {
+      if (!h.horiz) continue;
+      const hy = h.a[1], hlo = Math.min(h.a[0], h.b[0]), hhi = Math.max(h.a[0], h.b[0]);
+      for (const v of segList) {
+        if (v.poly === h.poly || v.horiz) continue;
+        const vx = v.a[0], vlo = Math.min(v.a[1], v.b[1]), vhi = Math.max(v.a[1], v.b[1]);
+        if (vx <= hlo + 0.5 || vx >= hhi - 0.5) continue;   // crossing must be interior to the horizontal run
+        if (hy <= vlo + 0.5 || hy >= vhi - 0.5) continue;   // ... and interior to the vertical run
+        (h.poly.cuts || (h.poly.cuts = [])).push(
+          { vert: false, fixed: hy - W, lo: vx - W, hi: vx + W },
+          { vert: false, fixed: hy + W, lo: vx - W, hi: vx + W });
+        (v.poly.cuts || (v.poly.cuts = [])).push(
+          { vert: true, fixed: vx - W, lo: hy - W, hi: hy + W },
+          { vert: true, fixed: vx + W, lo: hy - W, hi: hy + W });
+      }
+    }
     for (const poly of polys)
       drawTube(poly.pts, color, W, poly.ends[0].badge, poly.ends[1].badge, poly.cuts || null);
   }
@@ -2873,11 +3045,16 @@ function renderTruthSVG() {
       // Deadly pattern: outline each marked cell (any shape — rectangle, unique loop, …). It's a region
       // marker (the assumption), not a candidate line, so it draws once and contributes nothing to pass 1.
       if (planningPass) return;
-      const pad = UNIQUE_INSET;
       for (const cell of set.cells) {
         const el = cellEls[cell]; if (!el) continue;
         const b = el.getBoundingClientRect();
+        // Base inset, plus one nesting step per pattern that already owns this cell — so a shared cell
+        // draws concentric outlines (outer = first pattern, inner = second) rather than overlapping.
+        const owners = cellToUnique.get(cell);
+        const rank = owners ? owners.indexOf(set) : 0;
+        const pad = UNIQUE_INSET + rank * UNIQUE_NEST;
         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.dataset.uidx = set._uidx;   // lets the Truths-list hover focus/dim this pattern
         rect.setAttribute('x', b.left - wrap.left + pad); rect.setAttribute('y', b.top - wrap.top + pad);
         rect.setAttribute('width', b.width - 2 * pad); rect.setAttribute('height', b.height - 2 * pad);
         rect.setAttribute('rx', '6');
@@ -3125,6 +3302,13 @@ function renderTruthSVG() {
         }
         if (bi < 0) break;
         const e = remaining.splice(bi, 1)[0], er = Math.floor(e / 9), ec = e % 9;
+        // Already on the tube? If the spine bends through this elimination's cell, it's connected — routing
+        // it again would add a redundant bar (and, seeded into pass 2, would wrongly steer the spine's elbow
+        // away from that very cell, forcing the longer route). Just mark it connected.
+        if (segs.some(s => (s.horiz && s.rlo === er && ec >= s.clo && ec <= s.chi) ||
+                           (s.vert  && s.clo === ec && er >= s.rlo && er <= s.rhi))) {
+          connected.push(e); continue;
+        }
         // Shortest perpendicular drop onto an existing segment (foot shares the elim's row/col).
         let dropDist = Infinity, footR = -1, footC = -1, footSeg = null;
         for (const s of segs) {
@@ -3214,7 +3398,7 @@ function toggleTheme() {
   theme = theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = theme;
   refreshVizColors();
-  for (const t of userTruths) t.color = truthTypeColor(t);
+  assignTruthColors();
   if (lastCheck && lastCheck.covers)
     for (const c of lastCheck.covers)
       c.color = (c.isCellTruth || c.unit < 18) ? LINK_LINE_GRAY : truthTypeColor(c);
@@ -3234,6 +3418,9 @@ function updateThemeToggle() {
 // Opacity (0–100) of the big given/solved digits, via a CSS variable.
 function setDigitOpacity(pct) {
   document.documentElement.style.setProperty('--digit-opacity', pct / 100);
+}
+function setCandOpacity(pct) {
+  document.documentElement.style.setProperty('--cand-opacity', pct / 100);
 }
 
 function clearDragLine() {
@@ -3280,10 +3467,23 @@ function renderTruthPanel() {
     userTruths.forEach((truth, i) => {
       const item = document.createElement('div');
       item.className = 'truth-item';
+      // Uniqueness patterns get an editable colour swatch (native picker) + a reset once overridden;
+      // every other truth type keeps its fixed by-type colour as a static dot.
+      const swatch = truth.isUnique
+        ? `<input type="color" class="truth-swatch" value="${truth.color}" title="Change pattern colour" oninput="livePatternColor(${i}, this.value)" onchange="setPatternColor(${i}, this.value)">`
+        : `<span class="truth-swatch" style="background:${truth.color}"></span>`;
+      const reset = (truth.isUnique && truth.colorOverride)
+        ? `<button class="truth-reset" title="Reset to automatic colour" onclick="resetPatternColor(${i})">↺</button>`
+        : '';
       item.innerHTML =
-        `<span class="truth-swatch" style="background:${truth.color}"></span>` +
+        swatch +
         `<span class="truth-label">${truth.label}</span>` +
+        reset +
         `<button class="truth-del" title="Remove" onclick="removeTruth(${i})">×</button>`;
+      if (truth.isUnique) {
+        item.onmouseenter = () => focusUniquePattern(truth);
+        item.onmouseleave = () => unfocusUniquePattern();
+      }
       panel.appendChild(item);
     });
   }
@@ -3368,18 +3568,13 @@ function updateModeHint() {
   if (el) el.textContent = MODE_HINTS[userMode] || '';
 }
 
-// Reflect the in-progress deadly-pattern selection: outline the marked cells and, in the hint, report
-// whether they form a valid pattern (and its extras) so the user knows when Enter will create a truth.
+// Reflect the in-progress deadly-pattern selection by outlining the marked cells. The pattern itself is
+// NOT evaluated here — running deadlyExtras on every click was needless work and a churny live label;
+// the hint stays static and the pattern is figured out once, when the user presses Enter.
 function updateUniquePending() {
   document.querySelectorAll('.cell.unique-pending').forEach(el => el.classList.remove('unique-pending'));
   for (const c of pendingUnique) { const el = cellEls[c]; if (el) el.classList.add('unique-pending'); }
-  const el = document.getElementById('mode-hint');
-  if (!el) return;
-  if (!pendingUnique.size) { updateModeHint(); return; }
-  const n = pendingUnique.size, res = deadlyExtras(pendingUnique);
-  el.textContent = res.err
-    ? `Locked pattern — ${n} cell${n !== 1 ? 's' : ''} marked. ${res.err}`
-    : `Locked pattern (${res.mode === 'logic' ? 'logic' : 'uniqueness'}) — extras ${res.extras.map(candRef).join(', ')}. Press Enter to create the strong-link truth (Esc to clear).`;
+  updateModeHint();
 }
 
 // ── Drag event handlers ─────────────────────────────────────────────────────
@@ -3424,7 +3619,7 @@ function setupDragHandlers() {
     if (userMode === 'unique') {
       e.preventDefault();
       if (pendingUnique.has(i)) pendingUnique.delete(i); else pendingUnique.add(i);
-      updateUniquePending();   // live status + highlight; Enter creates the truth
+      updateUniquePending();   // just the cell highlight; Enter evaluates and creates the truth
       return;
     }
 
@@ -3722,9 +3917,15 @@ function loadSavedState(str) {
     else skipped++;
     i += len;
   }
+  assignTruthColors();
   buildGrid(); applyAllHighlights(); renderTruthSVG(); renderTruthPanel(); clearCheckResult();
   history.replaceState(null, '', '#' + str);
-  const note = userTruths.length ? ` (${userTruths.length} truth${userTruths.length !== 1 ? 's' : ''} restored${skipped ? `, ${skipped} skipped` : ''})` : '';
+  // Report restored/skipped truths — including when 0 were restored, so a dropped pattern (e.g. one
+  // that no longer spans all its cells) isn't silently lost.
+  const parts = [];
+  if (userTruths.length) parts.push(`${userTruths.length} truth${userTruths.length !== 1 ? 's' : ''} restored`);
+  if (skipped) parts.push(`${skipped} skipped`);
+  const note = parts.length ? ` (${parts.join(', ')})` : '';
   setStatus('Saved puzzle loaded.' + note, 'ok');
   return true;
 }
