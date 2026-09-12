@@ -3125,7 +3125,12 @@ function renderTruthSVG() {
           drawPolyline([p, vertFirst ? [p[0], q[1]] : [q[0], p[1]], q], color, truthW);
         };
         const cells = set.keys.map(kk => { const c = keyCell(kk); return [Math.floor(c / 9), c % 9]; });
-        const dist = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+        // Manhattan distance, with a sub-1 penalty on a diagonal (non-collinear) pair so that among
+        // equal-length ties the tree prefers a straight run. That straight run becomes an actual line
+        // the leftover cell can T-junction into — e.g. a box truth shaped ⊤ links its two base cells as
+        // one horizontal bar and drops the apex straight onto it, instead of fanning two curved elbows.
+        const dist = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1])
+          + (a[0] === b[0] || a[1] === b[1] ? 0 : 0.25);
         const inTree = [0], rest = cells.map((_, i) => i).slice(1), edges = [];
         while (rest.length) {
           let bi = 0, bk = 0, bd = Infinity;
@@ -3148,8 +3153,8 @@ function renderTruthSVG() {
         const onRun = (h, line) => runs.some(r => r.h === h && r.line === line) ? 1 : 0;
         // Does a run on this line actually cover position `at` (so a perpendicular would truly meet it)?
         const runCovers = (h, line, at) => runs.some(r => r.h === h && r.line === line && r.lo <= at && at <= r.hi);
-        const tArm = (b, junction) => {   // perpendicular arm from cell b to the junction on the run
-          const p = ptOf(b[0], b[1]);
+        const tArm = (cell, junction) => {   // perpendicular arm from `cell` to the junction on the run
+          const p = ptOf(cell[0], cell[1]);
           if (p) drawPolyline([p, junction], color, truthW, true, false);   // don't trim the run end
         };
         for (const [i, j] of edges) {
@@ -3159,12 +3164,24 @@ function renderTruthSVG() {
           const scoreH = onRun(true, a[0]) + onRun(false, b[1]);   // horizontal-first: row a, col b
           const vertFirst = scoreV >= scoreH;
           const pa = ptOf(a[0], a[1]), pb = ptOf(b[0], b[1]);
-          if (vertFirst && pa && pb && runCovers(false, a[1], b[0]))       // T: horizontal arm into the column
-            tArm(b, [pa[0], pb[1]]);
-          else if (!vertFirst && pa && pb && runCovers(true, a[0], b[1]))  // T: vertical arm into the row
-            tArm(b, [pb[0], pa[1]]);
-          else
-            elbow(a, b, vertFirst);
+          if (!pa || !pb) { elbow(a, b, vertFirst); continue; }
+          // When one of the elbow's two arms lands ON an existing run, that arm would just re-draw the
+          // run, so we keep only the perpendicular arm and butt it into the run as a clean right-angle
+          // T (no rounded corner). Either arm can be the one on the run: the spine arm (from a) or the
+          // stub arm (into b). The corner pixel is (pa.x, pb.y) for vertFirst, (pb.x, pa.y) otherwise.
+          if (vertFirst) {
+            if (runCovers(false, a[1], b[0]))        // a's column is the run → stub from b into it
+              tArm(b, [pa[0], pb[1]]);
+            else if (runCovers(true, b[0], a[1]))    // b's row is the run → drop a straight from a onto it
+              tArm(a, [pa[0], pb[1]]);
+            else elbow(a, b, true);
+          } else {
+            if (runCovers(true, a[0], b[1]))         // a's row is the run → stub from b into it
+              tArm(b, [pb[0], pa[1]]);
+            else if (runCovers(false, b[1], a[0]))   // b's column is the run → drop a straight from a onto it
+              tArm(a, [pb[0], pa[1]]);
+            else elbow(a, b, false);
+          }
         }
         return;
       }
