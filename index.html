@@ -94,7 +94,6 @@ body {
 /* Header: title + toolbar on one fixed-height row. The title is a quiet label, not a banner —
    the board is the subject of the page. */
 #topbar { flex: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-#app-title { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; color: var(--n-500); }
 
 /* ── Toolbar ── */
 #toolbar {
@@ -619,7 +618,6 @@ input.truth-swatch:hover { box-shadow: 0 0 0 2px var(--n-200); border-radius: 50
 
 <div id="app">
 <header id="topbar">
-  <span id="app-title">Sudoku Move Visualizer</span>
   <div id="toolbar">
   <input id="puzzle-input" type="text"
     placeholder="81-digit string (0=empty)"
@@ -801,7 +799,7 @@ const LINK_CELL_FILL_OP = 0.07;
 // Single source of truth for the truth-line stroke, so the grid and the legend can't drift apart.
 // All truth types (row / column / box) draw at the same width and opacity.
 const TRUTH_LINE_W  = 3.5;
-const TRUTH_LINE_OP = 0.8;
+const TRUTH_LINE_OP = 0.9;
 
 // Deadly-pattern cell outline (uniqueness marker): faint pink fill + a pink border, inset from the
 // cell edge. Shared by the board renderer and the legend so the two can't drift.
