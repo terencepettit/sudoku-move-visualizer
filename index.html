@@ -42,7 +42,10 @@
   --r-lg: 10px;
 
   --shadow-1: 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-2: 0 4px 16px rgba(0,0,0,0.10);
+  --shadow-2: 0 4px 16px rgba(0,0,0,0.16);
+  /* Reverse-vignette for the panels: no offset (centred) + a positive spread so the shadow box is
+     bigger than the panel and bleeds out evenly on all four sides, like the panel sits in a soft pool. */
+  --panel-shadow: 0 0 28px 4px rgba(0,0,0,0.16);
 }
 
 /* Dark mode: a manual opt-in (data-theme="dark" set by the toggle) — never auto-enabled from the OS.
@@ -72,7 +75,8 @@
   --ok:        #46c46a;
 
   --shadow-1: 0 1px 2px rgba(0,0,0,0.4);
-  --shadow-2: 0 6px 24px rgba(0,0,0,0.5);
+  --shadow-2: 0 6px 24px rgba(0,0,0,0.62);
+  --panel-shadow: 0 0 34px 6px rgba(0,0,0,0.6);
 }
 
 html, body { height: 100%; }
@@ -148,7 +152,10 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .segmented { display: inline-flex; background: var(--n-100); border-radius: var(--r-md); padding: 2px; gap: 2px; }
 .segmented .mode-btn { background: transparent; color: var(--n-600); border-radius: var(--r-sm); padding: 4px 10px; }
 .segmented .mode-btn:hover { background: rgba(0,0,0,0.04); color: var(--n-900); }
-.segmented .mode-btn.active { background: var(--n-0); color: var(--n-900); font-weight: 500; box-shadow: var(--shadow-1); }
+/* No font-weight change on the active tab: bolding a long label ("Draw Truths") widens the button,
+   which varied the toolbar width by mode and tipped it onto a second line. The white face + shadow +
+   darker text already mark the active tab, so the control keeps a constant (single-line) width. */
+.segmented .mode-btn.active { background: var(--n-0); color: var(--n-900); box-shadow: var(--shadow-1); }
 
 /* Links is boolean state, not an action — so it's a switch, not a button that renames itself. */
 .btn-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--n-600); }
@@ -279,9 +286,13 @@ body.highlight-mode #highlight-panel { display: block; }
   background: var(--n-0);
   border: 1px solid var(--n-150);
   border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
   font-size: 12px;
   color: var(--n-600);
 }
+/* #legend sets display:flex (ID specificity), which would out-rank the UA [hidden] rule — so the
+   toggle's `hidden` needs this explicit override (and !important to also beat the responsive rule). */
+#legend[hidden] { display: none !important; }
 .legend-section { display: flex; flex-direction: column; gap: 7px; }
 .legend-title {
   font-size: 9.5px; font-weight: 500; text-transform: uppercase;
@@ -316,6 +327,7 @@ body.highlight-mode #highlight-panel { display: block; }
   background: var(--grid-thin);        /* thin within-box grid lines */
   border: 3px solid var(--grid-thick); /* outer border, matching the box separators */
   border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
   overflow: hidden;                   /* clips the corner cells to the radius (SVG overlays are siblings, so unclipped) */
   position: absolute;
   left: 0; top: 0;
@@ -488,6 +500,7 @@ body.highlight-mode .cell { cursor: pointer; }
   background: var(--n-0);
   border: 1px solid var(--n-150);
   border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
   padding: 12px 14px;
 }
 #truth-section { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
@@ -638,6 +651,8 @@ input.truth-swatch:hover { box-shadow: 0 0 0 2px var(--n-200); border-radius: 50
   <span class="sep"></span>
   <button id="btn-links" class="btn-toggle active" onclick="toggleLinks()" aria-pressed="true"
     title="Show or hide the covering links on the grid"><span class="switch"></span>Links</button>
+  <button id="btn-legend" class="btn-toggle active" onclick="toggleLegend()" aria-pressed="true"
+    title="Show or hide the legend beside the board"><span class="switch"></span>Legend</button>
   <label id="digit-opacity-label" title="Opacity of the big given/solved digits">Digits
     <input id="digit-opacity" type="range" min="0" max="100" value="100"
       oninput="setDigitOpacity(this.value)">
@@ -735,6 +750,7 @@ let pendingUnique = new Set();   // cells being marked as a deadly pattern (Uniq
 let lastCheck  = null;   // last checkMove result
 let solution   = null;   // null if puzzle has no unique solution, else 81-digit array
 let showLinks  = true;   // display toggle for the auto-generated cover links
+let showLegend = true;   // display toggle for the key/legend panel beside the board
 
 // Purely cosmetic per-cell background colours. Read only by rendering — never by
 // any solve/check logic. null = no highlight.
@@ -3403,6 +3419,18 @@ function updateLinksToggle() {
   // The label stays "Links" — the switch carries the state. (Setting textContent here would also
   // wipe the .switch span, since it's a child of the button.)
   if (btn) { btn.classList.toggle('active', showLinks); btn.setAttribute('aria-pressed', String(showLinks)); }
+}
+
+function toggleLegend() {
+  showLegend = !showLegend;
+  updateLegendToggle();
+}
+
+function updateLegendToggle() {
+  const legend = document.getElementById('legend');
+  if (legend) legend.hidden = !showLegend;   // removes it from the flex row so the board re-centres
+  const btn = document.getElementById('btn-legend');
+  if (btn) { btn.classList.toggle('active', showLegend); btn.setAttribute('aria-pressed', String(showLegend)); }
 }
 
 // ── Dark mode ──────────────────────────────────────────────────────────────
