@@ -174,10 +174,8 @@ button:focus-visible, .swatch:focus-visible, #puzzle-input:focus-visible {
 .btn-toggle.active .switch::after { transform: translateX(10px); }
 
 /* Exactly one solid button on screen: the primary action. */
-.check-btn,
-.btn-primary { background: var(--n-900); color: var(--n-0); font-weight: 500; padding: 8px 14px; }
-.check-btn:hover,
-.btn-primary:hover { background: var(--n-800); color: var(--n-0); }
+.check-btn { background: var(--n-900); color: var(--n-0); font-weight: 500; padding: 8px 14px; }
+.check-btn:hover { background: var(--n-800); color: var(--n-0); }
 
 /* Destructive stays quiet until you reach for it. */
 .btn-danger { background: transparent; color: var(--n-500); }
@@ -2733,14 +2731,6 @@ function candCenter(k) {
   return [r.left + r.width / 2 - wrap.left, r.top + r.height / 2 - wrap.top];
 }
 
-function cellCenter(cellIdx) {
-  const el = cellEls[cellIdx];
-  if (!el) return null;
-  const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
-  const r = el.getBoundingClientRect();
-  return [r.left + r.width / 2 - wrap.left, r.top + r.height / 2 - wrap.top];
-}
-
 // ── Truth SVG ──────────────────────────────────────────────────────────────
 
 // SVG path string through pts (array of [x,y]) with each interior corner rounded to radius r
@@ -2807,6 +2797,28 @@ function renderTruthSVG() {
       r.left - wrap.left + pad + col * colW + colW / 2,
       r.top  - wrap.top  + pad + row * rowH + rowH / 2
     ];
+  }
+
+  // Candidate centre, memoised for the whole render. Layout is fixed across both routing passes, so
+  // each cell/digit is measured once (real badge rect, else the ghost fallback) and reused — instead
+  // of candCenter's per-call `getElementById('grid-wrap').getBoundingClientRect()` plus a fresh badge
+  // measurement on every one of the hundreds of ptOf calls. Keyed by candKey (cell*9 + digit-1).
+  // Measuring every distinct point up front also keeps the layout reads out of the drawing pass, so
+  // appending tubes to the SVG no longer forces a reflow before each subsequent measurement.
+  const ptCache = new Map();
+  function centerOf(cellIdx, digit) {
+    const k = cellIdx * 9 + (digit - 1);
+    let p = ptCache.get(k);
+    if (p !== undefined) return p;
+    const el = candEls[k];
+    if (el) {
+      const r = el.getBoundingClientRect();
+      p = [r.left + r.width / 2 - wrap.left, r.top + r.height / 2 - wrap.top];
+    } else {
+      p = ghostCandCenter(cellIdx, digit);
+    }
+    ptCache.set(k, p);
+    return p;
   }
 
   // Segments are appended here. For a multi-segment truth this is a <g opacity>
@@ -3046,6 +3058,96 @@ function renderTruthSVG() {
       drawTube(poly.pts, color, W, poly.ends[0].badge, poly.ends[1].badge, poly.cuts || null);
   }
 
+  // Solid-line sibling of renderLinkTubes for TRUTHS. Same idea — decompose the edge routes to axis-
+  // aligned segments, MERGE collinear overlapping runs, and chain shared corners into polylines — so two
+  // elbows that share a cell and run down its column fuse into one spine, with the other arms meeting it
+  // as clean right-angle Ts instead of two rounded lines drawn on top of each other. No tube walls to cut:
+  // a solid stub butting into a solid spine already reads as a clean T. The one extra job vs. the tube
+  // path is re-opening a GAP at every candidate badge the merged line now runs through (the old per-edge
+  // draw got those gaps for free by trimming each edge's ends), so badges never sit under a line.
+  function renderTruthLines(routes, candCenters, color, width) {
+    const near = (a, b) => Math.abs(a - b) < 0.6;
+    const raw = [];
+    for (const rt of routes) {
+      const P = rt.pts; if (!P || P.length < 2) continue;
+      if (P.length === 2) raw.push({ a: P[0].slice(), b: P[1].slice(), ba: rt.ts, bb: rt.te });
+      else { raw.push({ a: P[0].slice(), b: P[1].slice(), ba: rt.ts, bb: false });
+             raw.push({ a: P[1].slice(), b: P[2].slice(), ba: false, bb: rt.te }); }
+    }
+    // Merge collinear segments (same line, touching/overlapping ranges); badge flags on the extremes win.
+    const groups = new Map();
+    for (const s of raw) {
+      const horiz = near(s.a[1], s.b[1]);
+      const k = horiz ? 'h' + Math.round(s.a[1]) : 'v' + Math.round(s.a[0]);
+      (groups.get(k) || groups.set(k, []).get(k)).push(s);
+    }
+    const merged = [];
+    const mkSeg = (iv, horiz, fixed) => horiz
+      ? { a: [iv.lo, fixed], b: [iv.hi, fixed], ba: iv.loB, bb: iv.hiB }
+      : { a: [fixed, iv.lo], b: [fixed, iv.hi], ba: iv.loB, bb: iv.hiB };
+    for (const [k, g] of groups) {
+      const horiz = k[0] === 'h', fixed = horiz ? g[0].a[1] : g[0].a[0];
+      const items = g.map(s => { const av = horiz ? s.a[0] : s.a[1], bv = horiz ? s.b[0] : s.b[1];
+        return av <= bv ? { lo: av, hi: bv, loB: s.ba, hiB: s.bb } : { lo: bv, hi: av, loB: s.bb, hiB: s.ba }; })
+        .sort((x, y) => x.lo - y.lo);
+      let cur = null;
+      for (const it of items) {
+        if (cur && it.lo <= cur.hi + 0.5) { if (it.hi > cur.hi) { cur.hi = it.hi; cur.hiB = it.hiB; } }
+        else { if (cur) merged.push(mkSeg(cur, horiz, fixed)); cur = { lo: it.lo, hi: it.hi, loB: it.loB, hiB: it.hiB }; }
+      }
+      if (cur) merged.push(mkSeg(cur, horiz, fixed));
+    }
+    // Chain segments through degree-2 shared corner nodes into rounded polylines.
+    const nkey = p => Math.round(p[0]) + ',' + Math.round(p[1]);
+    const nodes = new Map();
+    for (const s of merged) for (const e of ['a', 'b']) { const kk = nkey(s[e]); (nodes.get(kk) || nodes.set(kk, []).get(kk)).push({ s, e }); }
+    const used = new Set(), polys = [];
+    for (const s0 of merged) {
+      if (used.has(s0)) continue;
+      used.add(s0);
+      const pts = [s0.a.slice(), s0.b.slice()], ends = [s0.ba, s0.bb];
+      const walk = (fromP, seg, prepend) => {
+        let p = fromP, cs = seg;
+        while (true) {
+          const nd = nodes.get(nkey(p));
+          if (!nd || nd.length !== 2) break;
+          const nx = nd.find(x => x.s !== cs);
+          if (!nx || used.has(nx.s)) break;
+          used.add(nx.s);
+          const far = (nx.e === 'a' ? nx.s.b : nx.s.a), farB = (nx.e === 'a' ? nx.s.bb : nx.s.ba);
+          if (prepend) { pts.unshift(far.slice()); ends[0] = farB; } else { pts.push(far.slice()); ends[1] = farB; }
+          cs = nx.s; p = far;
+        }
+      };
+      walk(s0.a, s0, true); walk(s0.b, s0, false);
+      polys.push({ pts, ends });
+    }
+    // Draw each polyline, re-breaking it at any candidate badge it passes through so every badge sits in a
+    // gap. A break point trims on both sides (badge gap); a run-end that's NOT a badge (a stub meeting a
+    // spine) is kept full so it reaches the line. Rounded corners survive inside an unbroken sub-polyline.
+    const onSeg = (p, a, b) =>
+      (near(a[1], b[1]) && near(p[1], a[1]) && p[0] > Math.min(a[0], b[0]) + 0.5 && p[0] < Math.max(a[0], b[0]) - 0.5) ||
+      (near(a[0], b[0]) && near(p[0], a[0]) && p[1] > Math.min(a[1], b[1]) + 0.5 && p[1] < Math.max(a[1], b[1]) - 0.5);
+    for (const poly of polys) {
+      const P = poly.pts;
+      const pts = [P[0].slice()], isBadge = [poly.ends[0]];
+      for (let i = 0; i < P.length - 1; i++) {
+        const a = P[i], b = P[i + 1];
+        const mids = candCenters.filter(c => onSeg(c, a, b))
+          .sort((u, v) => Math.hypot(u[0] - a[0], u[1] - a[1]) - Math.hypot(v[0] - a[0], v[1] - a[1]));
+        for (const m of mids) { pts.push(m.slice()); isBadge.push(true); }
+        pts.push(b.slice()); isBadge.push(i + 1 === P.length - 1 ? poly.ends[1] : false);
+      }
+      let start = 0;
+      for (let i = 1; i < pts.length; i++) {
+        if (isBadge[i] || i === pts.length - 1) {
+          if (i - start >= 1) drawPolyline(pts.slice(start, i + 1), color, width, isBadge[start], isBadge[i]);
+          start = i;
+        }
+      }
+    }
+  }
+
   // Render one set (truth or link). Truths draw as a solid line / filled square; links draw as
   // a hollow "tube" — a transparent band with the unit colour on its two long edges — / a
   // bordered square, so a truth and any number of links over the same run stack and stay visible.
@@ -3109,7 +3211,7 @@ function renderTruthSVG() {
     } else {
       const digit = keyDigit(set.keys[0]);
       const tubeW = isLink ? LINK_TUBE_HALF[set.unit < 9 ? 'row' : set.unit < 18 ? 'col' : 'box'] : 0;
-      const ptOf = (r, c) => candCenter(candKey(r * 9 + c, digit)) || ghostCandCenter(r * 9 + c, digit);
+      const ptOf = (r, c) => centerOf(r * 9 + c, digit);
 
       // Pass 1 only plans routes (to gather forced segments); it draws nothing.
       if (!planningPass) {
@@ -3123,26 +3225,15 @@ function renderTruthSVG() {
 
       if (!isLink) {
         // Truth routing. Connect the cells with a minimum spanning tree (Prim's, Manhattan distance):
-        // every cell joins its NEAREST already-connected neighbour. Because adjacent cells in a row/
-        // column are the closest, a collinear run naturally draws as consecutive straight segments, and
-        // two parallel runs get bridged by one short link between them (a clean staircase) rather than
-        // one run being force-fitted onto the other with a long L. Box truths draw 2px wider; each edge
-        // is its own drawPolyline so end-trim leaves every candidate badge sitting in a gap.
+        // every cell joins its NEAREST already-connected neighbour, so a collinear run becomes consecutive
+        // straight segments and parallel runs get bridged by one short link. Each MST edge is turned into a
+        // pixel route (2-pt straight, or 3-pt elbow), and renderTruthLines MERGES the collinear/overlapping
+        // arms + chains corners — so edges that share a cell and run down its column fuse into one spine
+        // with the others meeting it as clean Ts, rather than two rounded elbows stacked on top.
         const truthW = TRUTH_LINE_W;   // all truth types (row / column / box) draw at the same width
-        const seg = (a, b) => { const p = ptOf(a[0], a[1]), q = ptOf(b[0], b[1]); if (p && q) drawPolyline([p, q], color, truthW); };
-        // L between two real cells. The bend is built from the two REAL endpoint pixels (never a lookup
-        // on the possibly-empty corner cell): vertFirst leaves `a` down its column to b's row then across;
-        // else along a's row to b's column then down. Keeps the corner on the true candidate lanes.
-        const elbow = (a, b, vertFirst) => {
-          const p = ptOf(a[0], a[1]), q = ptOf(b[0], b[1]);
-          if (!p || !q) return;
-          drawPolyline([p, vertFirst ? [p[0], q[1]] : [q[0], p[1]], q], color, truthW);
-        };
         const cells = set.keys.map(kk => { const c = keyCell(kk); return [Math.floor(c / 9), c % 9]; });
         // Manhattan distance, with a sub-1 penalty on a diagonal (non-collinear) pair so that among
-        // equal-length ties the tree prefers a straight run. That straight run becomes an actual line
-        // the leftover cell can T-junction into — e.g. a box truth shaped ⊤ links its two base cells as
-        // one horizontal bar and drops the apex straight onto it, instead of fanning two curved elbows.
+        // equal-length ties the tree prefers a straight run — which then anchors the others' elbows.
         const dist = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1])
           + (a[0] === b[0] || a[1] === b[1] ? 0 : 0.25);
         const inTree = [0], rest = cells.map((_, i) => i).slice(1), edges = [];
@@ -3154,10 +3245,9 @@ function renderTruthSVG() {
           }
           edges.push([bi, rest[bk]]); inTree.push(rest[bk]); rest.splice(bk, 1);
         }
-        // Straight edges are the truth's runs (with their extent). A non-collinear edge picks the elbow
-        // whose two arms lie on those runs — so the bend extends an existing line rather than jutting a
-        // stub into the box. And when the chosen bend's spine arm actually lands ON a run, the corner is
-        // really a T-junction: draw only the perpendicular arm, straight into the line, no rounded corner.
+        // Collinear edges are the truth's runs. A non-collinear edge bends vertical- or horizontal-first,
+        // choosing whichever orientation lands its two arms on existing runs — so the elbow extends a line
+        // (and after the merge becomes a clean T into it) rather than jutting a lone stub into the box.
         const runs = [];
         for (const [i, j] of edges) {
           const a = cells[i], b = cells[j];
@@ -3165,38 +3255,19 @@ function renderTruthSVG() {
           else if (a[1] === b[1]) runs.push({ h: false, line: a[1], lo: Math.min(a[0], b[0]), hi: Math.max(a[0], b[0]) });
         }
         const onRun = (h, line) => runs.some(r => r.h === h && r.line === line) ? 1 : 0;
-        // Does a run on this line actually cover position `at` (so a perpendicular would truly meet it)?
-        const runCovers = (h, line, at) => runs.some(r => r.h === h && r.line === line && r.lo <= at && at <= r.hi);
-        const tArm = (cell, junction) => {   // perpendicular arm from `cell` to the junction on the run
-          const p = ptOf(cell[0], cell[1]);
-          if (p) drawPolyline([p, junction], color, truthW, true, false);   // don't trim the run end
-        };
+        const routes = [];
         for (const [i, j] of edges) {
           const a = cells[i], b = cells[j];
-          if (a[0] === b[0] || a[1] === b[1]) { seg(a, b); continue; }
+          const pa = ptOf(a[0], a[1]), pb = ptOf(b[0], b[1]);
+          if (!pa || !pb) continue;
+          if (a[0] === b[0] || a[1] === b[1]) { routes.push({ pts: [pa, pb], ts: true, te: true }); continue; }
           const scoreV = onRun(false, a[1]) + onRun(true, b[0]);   // vertical-first: col a, row b
           const scoreH = onRun(true, a[0]) + onRun(false, b[1]);   // horizontal-first: row a, col b
-          const vertFirst = scoreV >= scoreH;
-          const pa = ptOf(a[0], a[1]), pb = ptOf(b[0], b[1]);
-          if (!pa || !pb) { elbow(a, b, vertFirst); continue; }
-          // When one of the elbow's two arms lands ON an existing run, that arm would just re-draw the
-          // run, so we keep only the perpendicular arm and butt it into the run as a clean right-angle
-          // T (no rounded corner). Either arm can be the one on the run: the spine arm (from a) or the
-          // stub arm (into b). The corner pixel is (pa.x, pb.y) for vertFirst, (pb.x, pa.y) otherwise.
-          if (vertFirst) {
-            if (runCovers(false, a[1], b[0]))        // a's column is the run → stub from b into it
-              tArm(b, [pa[0], pb[1]]);
-            else if (runCovers(true, b[0], a[1]))    // b's row is the run → drop a straight from a onto it
-              tArm(a, [pa[0], pb[1]]);
-            else elbow(a, b, true);
-          } else {
-            if (runCovers(true, a[0], b[1]))         // a's row is the run → stub from b into it
-              tArm(b, [pb[0], pa[1]]);
-            else if (runCovers(false, b[1], a[0]))   // b's column is the run → drop a straight from a onto it
-              tArm(a, [pb[0], pa[1]]);
-            else elbow(a, b, false);
-          }
+          const corner = scoreV >= scoreH ? [pa[0], pb[1]] : [pb[0], pa[1]];
+          routes.push({ pts: [pa, corner, pb], ts: true, te: true });
         }
+        const candCenters = cells.map(c => ptOf(c[0], c[1])).filter(Boolean);
+        renderTruthLines(routes, candCenters, color, truthW);
         return;
       }
 
@@ -3475,7 +3546,7 @@ function updateDragLine(toClientX, toClientY) {
   svg.innerHTML = '';
   if (!drawState) return;
 
-  const p1 = drawState.fromCell != null ? cellCenter(drawState.fromCell) : candCenter(drawState.fromKey);
+  const p1 = candCenter(drawState.fromKey);
   if (!p1) return;
 
   const wrap = document.getElementById('grid-wrap').getBoundingClientRect();
@@ -3485,7 +3556,7 @@ function updateDragLine(toClientX, toClientY) {
   const x2 = toClientX - wrap.left;
   const y2 = toClientY - wrap.top;
 
-  const nextColor = drawState.fromCell != null ? VIZ_UNIQUE : TRUTH_COLOR;
+  const nextColor = TRUTH_COLOR;
 
   const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   line.setAttribute('x1', p1[0]); line.setAttribute('y1', p1[1]);
